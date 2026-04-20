@@ -1,0 +1,24 @@
+## Build artifacts
+build/
+Builds/
+cmake-build-*/
+out/
+
+## JUCE (cloned at build time by the workflow, not committed)
+JUCE/
+
+## IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+## Plugin scratch
+dsp_validation/*.wav
+*.o
+*.obj
+*.exe
+*.vst3
+*.component

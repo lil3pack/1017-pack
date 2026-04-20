@@ -1,0 +1,117 @@
+name: Build 1017 Pack
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch: # lets you trigger manually from the Actions tab
+
+env:
+  BUILD_TYPE: Release
+  JUCE_VERSION: 7.0.12 # pinned, known-good
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: Windows
+          - os: macos-latest
+            name: macOS
+          - os: ubuntu-22.04
+            name: Linux
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # --- Linux-only system deps (JUCE GUI needs X11/ALSA headers) ---
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libcurl4-openssl-dev \
+            libfreetype6-dev \
+            libfontconfig1-dev \
+            libx11-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libxrender-dev \
+            libglu1-mesa-dev \
+            mesa-common-dev \
+            libjack-jackd2-dev \
+            ninja-build
+
+      # --- Cache JUCE clone so subsequent runs skip the download ---
+      - name: Cache JUCE
+        id: juce-cache
+        uses: actions/cache@v4
+        with:
+          path: JUCE
+          key: juce-${{ env.JUCE_VERSION }}-${{ runner.os }}
+
+      - name: Clone JUCE
+        if: steps.juce-cache.outputs.cache-hit != 'true'
+        run: git clone --depth 1 --branch ${{ env.JUCE_VERSION }} https://github.com/juce-framework/JUCE.git JUCE
+        shell: bash
+
+      # --- Configure ---
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DJUCE_DIR="${{ github.workspace }}/JUCE"
+
+      - name: Configure (macOS)
+        if: runner.os == 'macOS'
+        run: cmake -B build -G "Xcode" -DJUCE_DIR="${{ github.workspace }}/JUCE" -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64"
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: cmake -B build -G Ninja -DJUCE_DIR="${{ github.workspace }}/JUCE" -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+
+      # --- Build ---
+      - name: Build
+        run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel
+
+      # --- Upload artifacts ---
+      # Note: JUCE wraps the plugin in a *_artefacts folder under each target.
+      # .vst3 on all platforms, .component (AU) only on macOS.
+
+      - name: Upload TRAP HOUSE (${{ matrix.name }}) — VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: TRAP_HOUSE-${{ matrix.name }}-VST3
+          path: build/TrapHouse/TrapHouse_artefacts/${{ env.BUILD_TYPE }}/VST3/
+          if-no-files-found: warn
+
+      - name: Upload TRAP HOUSE (macOS) — AU
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TRAP_HOUSE-macOS-AU
+          path: build/TrapHouse/TrapHouse_artefacts/${{ env.BUILD_TYPE }}/AU/
+          if-no-files-found: warn
+
+      - name: Upload LEMONADE (${{ matrix.name }}) — VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: LEMONADE-${{ matrix.name }}-VST3
+          path: build/Lemonade/Lemonade_artefacts/${{ env.BUILD_TYPE }}/VST3/
+          if-no-files-found: warn
+
+      - name: Upload LEMONADE (macOS) — AU
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: LEMONADE-macOS-AU
+          path: build/Lemonade/Lemonade_artefacts/${{ env.BUILD_TYPE }}/AU/
+          if-no-files-found: warn
