@@ -123,8 +123,9 @@ namespace th::dsp
             const auto a = [sampleRate] (float ms) {
                 return (float) std::exp (-1.0 / (sampleRate * ms * 1.0e-3));
             };
-            aFastAtt = a (2.0f);    aFastRel = a (60.0f);
-            aSlowAtt = a (40.0f);   aSlowRel = a (400.0f);
+            // Slower fast-attack (4 ms) avoids hyperactivity on dense mixes.
+            aFastAtt = a (4.0f);    aFastRel = a (100.0f);
+            aSlowAtt = a (60.0f);   aSlowRel = a (400.0f);
             reset();
         }
 
@@ -337,6 +338,10 @@ namespace th::dsp
             transients.resize ((size_t) nCh);
             for (auto& t : transients) t.prepare (sampleRate);
 
+            // v3.2: smoother on transient amount (5 ms) — kills modulation clicks.
+            trAmtSmoother.reset (osRate, 0.005);
+            trAmtSmoother.setCurrentAndTargetValue (0.0f);
+
             // DSP v3: TAPE character HF damping — very subtle LP above 10 kHz
             // gives the "bandwidth-limited tape" feel on TAPE mode only.
             tapeHfDamp.resize ((size_t) nCh);
@@ -364,6 +369,7 @@ namespace th::dsp
             for (auto& t : transients) t.reset();
             for (auto& f : tapeHfDamp) f.reset();
             autoGainSmoother.setCurrentAndTargetValue (1.0f);
+            trAmtSmoother  .setCurrentAndTargetValue (0.0f);
             subLowpass.reset();
             tpLimiter.reset();
             lowBandBuffer.clear();
@@ -494,20 +500,21 @@ namespace th::dsp
                         harmAmt = cachedHarm   [n];
                     }
 
-                    // DSP v3: transient modulation (preserves punch on drum hits).
-                    // One native sample = 4 oversampled samples, so nativeIdx = n / 4.
+                    // DSP v3.2: transient modulation with smoothing.
+                    // The raw trAmt (from TransientDetector) is per-native-sample
+                    // and can jump quickly; we run it through a smoother to avoid
+                    // audible clicks during parameter modulation.
                     const int nativeIdx = juce::jmin (n >> 2, transientCacheSize - 1);
-                    const float trAmt = cachedTransient[(size_t) nativeIdx];
+                    const float rawTr   = cachedTransient[(size_t) nativeIdx];
+                    trAmtSmoother.setTargetValue (rawTr);
+                    const float trAmt   = trAmtSmoother.getNextValue();
 
-                    // During a transient, clipping is softened:
-                    //   - Effective input gain reduced ~15% (so transient peak
-                    //     enters the clip less hard → preserves attack shape)
-                    //   - Knee softened → smoother limiting of the transient
-                    //   - Harmonics reduced ~50% → cleaner transient, less fizz
-                    // Decay is controlled by the slow env inside TransientDetector.
-                    const float effGain = inGain  * (1.0f - trAmt * 0.15f);
-                    const float effKnee = juce::jlimit (0.0f, 1.0f, knee + trAmt * 0.35f);
-                    const float effHarm = harmAmt * (1.0f - trAmt * 0.5f);
+                    // Reduced modulation depth for cleaner sound:
+                    //   gain -8% (was 15%), knee +15% (was 35%), harm -25% (was 50%).
+                    // Still preserves transient punch without clicking.
+                    const float effGain = inGain  * (1.0f - trAmt * 0.08f);
+                    const float effKnee = juce::jlimit (0.0f, 1.0f, knee + trAmt * 0.15f);
+                    const float effHarm = harmAmt * (1.0f - trAmt * 0.25f);
 
                     // Input gain
                     float x = d[n] * effGain;
@@ -530,16 +537,18 @@ namespace th::dsp
                             break;
 
                         case Character::Tube:
-                            // Asymmetric diode clipper (1N914-inspired model):
-                            // positive lobe saturates ~45% faster than negative.
-                            // This generates strong even harmonics ahead of the main clip.
+                            // SMOOTH tube model (Decapitator / Saturn 2 style):
+                            //   y = tanh(x * 1.1 + bias) - tanh(bias)
+                            // Symmetric tanh with DC offset → the offset introduces
+                            // 2nd-harmonic content, then we subtract the DC so no
+                            // offset remains. Derivative is continuous everywhere
+                            // (unlike an asymmetric-slope model which has a kink
+                            // at x=0 that aliases heavily — the ORIGIN of the
+                            // crackle reported in v3.1).
                             {
-                                const float slopePos = 1.3f;
-                                const float slopeNeg = 0.9f;
-                                x = (x > 0.0f) ? std::tanh (x * slopePos) / std::tanh (slopePos)
-                                               : std::tanh (x * slopeNeg) / std::tanh (slopeNeg);
-                                // Extra static compression-like bulge for "tubey" thickness.
-                                x *= 0.94f;
+                                const float bias = 0.08f;
+                                x = std::tanh (x * 1.1f + bias) - std::tanh (bias);
+                                x *= 0.95f; // slight static compression for "tubey" thickness
                             }
                             break;
                     }
@@ -714,6 +723,9 @@ namespace th::dsp
         std::vector<TransientDetector> transients;      // per-channel (native rate)
         std::vector<OnePoleLP>         tapeHfDamp;      // per-channel (oversampled rate, TAPE only)
         std::array<float, 2048>        cachedTransient {}; // per-native-sample transient amount
+
+        // DSP v3.2: smoother on transient amount to prevent click-on-modulation
+        juce::LinearSmoothedValue<float> trAmtSmoother { 0.0f };
 
         // DSP v3.1: post-processing True-Peak limiter
         LookAheadTPLimiter tpLimiter;

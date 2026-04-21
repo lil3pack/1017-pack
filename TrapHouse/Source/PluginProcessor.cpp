@@ -37,7 +37,7 @@ APVTS::ParameterLayout TrapHouseProcessor::createLayout()
 
     params.push_back (std::make_unique<AudioParameterChoice> (
         ParameterID { th::PID::character, 1 }, "Character",
-        StringArray { "HARD", "TAPE", "TUBE" }, 0));
+        StringArray { "HARD", "TAPE", "TUBE" }, 1)); // TAPE default — warmest, master-friendly
 
     params.push_back (std::make_unique<AudioParameterBool> (
         ParameterID { th::PID::autoGain, 1 }, "Auto Gain", true /* default ON */));
@@ -98,24 +98,25 @@ void TrapHouseProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const float drive = juce::jlimit (0.0f, 1.0f,
         apvts.getRawParameterValue (th::PID::drive)->load());
 
-    // DRIVE macro — pro master-grade mapping (v3.1):
-    //   - Exponential (pow 1.6) curve so low settings are usable on a master
-    //     without crushing — 30% drive ≈ +2 dB input, not +5.4 dB.
-    //   - Max input gain capped at +12 dB (was +18 in v3.0, too aggressive for master).
-    //   - Max harmonics 0.50 (was 0.75) — cleaner top end.
-    //   - Ceiling defaults to -1.0 dBFS (streaming-safe headroom,
-    //     combined with post-downsample TP limiter = -1 dBTP compliant).
+    // DRIVE macro — pro master-grade mapping (v3.2, "warmth edition"):
+    //   - Input gain: exponential (pow 1.6) curve, max +12 dB — gentle on master.
+    //   - Harmonics: LINEAR curve (drive × 0.40) — gives consistent warmth
+    //     even at low DRIVE (important for master-bus use where 20-30% drive
+    //     should already add character, not be invisible).
+    //   - Knee: softens more gradually.
+    //   - Ceiling: -1.0 dBFS + TP limiter = -1 dBTP true-peak safe.
     //
     //   drive=0    → 0 dB    / knee 0.90 / harm 0.00   — transparent bypass
-    //   drive=0.3  → +1.8 dB / knee 0.74 / harm 0.08   — subtle mastering lift
-    //   drive=0.5  → +3.8 dB / knee 0.55 / harm 0.18   — gentle push
-    //   drive=0.7  → +6.5 dB / knee 0.35 / harm 0.28   — punchy
-    //   drive=1.0  → +12.0 dB / knee 0.05 / harm 0.50  — destructive
+    //   drive=0.2  → +0.8 dB / knee 0.80 / harm 0.08   — invisible warmth
+    //   drive=0.3  → +1.8 dB / knee 0.72 / harm 0.12   — subtle mastering lift
+    //   drive=0.5  → +3.8 dB / knee 0.55 / harm 0.20   — audible character
+    //   drive=0.7  → +6.5 dB / knee 0.35 / harm 0.28   — pushing
+    //   drive=1.0  → +12.0 dB / knee 0.05 / harm 0.40  — destroy mode
     const float driveCurve = std::pow (drive, 1.6f);
     const float inGainDb = driveCurve * 12.0f;
     const float ceilDb   = -1.0f;
     const float knee     = 0.90f - driveCurve * 0.85f;
-    const float harm     = driveCurve * 0.50f;
+    const float harm     = drive * 0.40f; // linear → more warmth at low settings
 
     const float subGuard = juce::jlimit (0.0f, 1.0f,
         apvts.getRawParameterValue (th::PID::subGuard)->load());
