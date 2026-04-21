@@ -85,13 +85,34 @@ namespace th::ui
                 else            wave.lineTo (px, py);
             }
 
-            // Glow layer (wide & translucent)
-            g.setColour (palette.purpleHi.withAlpha (0.25f));
-            g.strokePath (wave, juce::PathStrokeType (3.5f, juce::PathStrokeType::curved));
+            // 🌊 Filled gradient polygon under curve (adds depth)
+            {
+                juce::Path filled = wave;
+                filled.lineTo (bounds.getRight() - 10.0f, midY);
+                filled.lineTo (bounds.getX() + 10.0f,    midY);
+                filled.closeSubPath();
+                juce::ColourGradient grad (palette.purpleHi.withAlpha (0.45f), 0.0f, bounds.getY(),
+                                            palette.purpleHi.withAlpha (0.0f),  0.0f, bounds.getCentreY(), false);
+                grad.addColour (0.5, palette.purpleHi.withAlpha (0.12f));
+                g.setGradientFill (grad);
+                g.fillPath (filled);
+            }
 
-            // Main waveform (bright purple)
+            // 💥 Multi-pass BLOOM glow (outer → mid → inner → core)
+            g.setColour (palette.purpleHi.withAlpha (0.15f));
+            g.strokePath (wave, juce::PathStrokeType (8.0f, juce::PathStrokeType::curved));
+            g.setColour (palette.purpleHi.withAlpha (0.30f));
+            g.strokePath (wave, juce::PathStrokeType (5.0f, juce::PathStrokeType::curved));
+            g.setColour (palette.purpleHi.withAlpha (0.55f));
+            g.strokePath (wave, juce::PathStrokeType (2.8f, juce::PathStrokeType::curved));
+
+            // ✨ Main waveform (bright purple, thin)
             g.setColour (palette.purpleHi);
-            g.strokePath (wave, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved));
+            g.strokePath (wave, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved));
+
+            // 🟡 Gold core line (dual-tone — "iced" feel)
+            g.setColour (palette.goldHi.withAlpha (0.7f));
+            g.strokePath (wave, juce::PathStrokeType (0.6f, juce::PathStrokeType::curved));
 
             // Center axis
             g.setColour (palette.cream.withAlpha (0.1f));

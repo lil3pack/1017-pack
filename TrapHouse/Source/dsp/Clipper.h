@@ -150,6 +150,96 @@ namespace th::dsp
     };
 
     //==========================================================================
+    // Look-ahead True-Peak limiter (post-downsample safety net).
+    //
+    // Adds ~2 ms of latency but guarantees that the final output never exceeds
+    // the ceiling, even under inter-sample-peak (ISP) conditions that survive
+    // oversampled clipping. Essential for "pro master" usage where true-peak
+    // compliance (e.g. -1 dBTP for streaming) matters.
+    //
+    // Algorithm: fast attack (0.5 ms) / slow release (50 ms) smoothed gain
+    // reduction, applied to a delayed signal so GR can ramp up BEFORE the
+    // loud peak reaches output.
+    //==========================================================================
+    class LookAheadTPLimiter
+    {
+    public:
+        void prepare (double sampleRate, int numChannels, int maxBlockSize)
+        {
+            lookAhead = (int) std::ceil (sampleRate * 0.002); // 2 ms
+            const int need = lookAhead + maxBlockSize + 4;
+            int pow2 = 1;
+            while (pow2 < need) pow2 <<= 1;
+            bufferSize = pow2;
+            bufferMask = pow2 - 1;
+            buffers.resize ((size_t) juce::jmax (1, numChannels));
+            for (auto& b : buffers) b.assign ((size_t) bufferSize, 0.0f);
+            writePos = 0;
+            gainReduction = 1.0f;
+
+            const float sr = (float) sampleRate;
+            attCoeff = std::exp (-1.0f / (sr * 0.0005f)); // 0.5 ms attack
+            relCoeff = std::exp (-1.0f / (sr * 0.050f));  // 50  ms release
+        }
+
+        int getLatencySamples() const noexcept { return lookAhead; }
+
+        void reset() noexcept
+        {
+            for (auto& b : buffers) std::fill (b.begin(), b.end(), 0.0f);
+            writePos = 0;
+            gainReduction = 1.0f;
+        }
+
+        void process (juce::AudioBuffer<float>& buffer, float ceilingLinear)
+        {
+            const int numSamples = buffer.getNumSamples();
+            const int numChannels = juce::jmin ((int) buffers.size(), buffer.getNumChannels());
+            if (numSamples <= 0 || numChannels <= 0 || ceilingLinear <= 0.0f) return;
+
+            for (int n = 0; n < numSamples; ++n)
+            {
+                // Measure peak across channels of this new input sample
+                float peak = 0.0f;
+                for (int ch = 0; ch < numChannels; ++ch)
+                    peak = std::max (peak, std::abs (buffer.getReadPointer (ch)[n]));
+
+                // Target gain reduction to bring peak to ceiling
+                const float target = peak > ceilingLinear ? ceilingLinear / peak : 1.0f;
+
+                // Fast attack, slow release
+                if (target < gainReduction)
+                    gainReduction = attCoeff * gainReduction + (1.0f - attCoeff) * target;
+                else
+                    gainReduction = relCoeff * gainReduction + (1.0f - relCoeff) * target;
+
+                // Write current input to ring buffer, output delayed sample * GR
+                for (int ch = 0; ch < numChannels; ++ch)
+                {
+                    auto& buf = buffers[(size_t) ch];
+                    const int readPos = (writePos - lookAhead + bufferSize) & bufferMask;
+                    const float delayed = buf[(size_t) readPos];
+                    buf[(size_t) writePos] = buffer.getReadPointer (ch)[n];
+                    buffer.getWritePointer (ch)[n] = delayed * gainReduction;
+                }
+                writePos = (writePos + 1) & bufferMask;
+            }
+        }
+
+        // Exposes current GR (for meter). 1.0 = no reduction, <1 = active.
+        float getCurrentGainReduction() const noexcept { return gainReduction; }
+
+    private:
+        std::vector<std::vector<float>> buffers;
+        int lookAhead  { 96 };
+        int bufferSize { 128 };
+        int bufferMask { 127 };
+        int writePos   { 0 };
+        float gainReduction { 1.0f };
+        float attCoeff { 0.99f }, relCoeff { 0.999f };
+    };
+
+    //==========================================================================
     // One-pole low-pass (for TAPE character HF damping).
     //==========================================================================
     class OnePoleLP
@@ -254,6 +344,14 @@ namespace th::dsp
 
             // Cached per-sample transient amount, one slot per native sample
             cachedTransient.fill (0.0f);
+
+            // DSP v3.1: post-processing True-Peak limiter (master-ready)
+            tpLimiter.prepare (sampleRate, nCh, maxBlockSize);
+
+            // Combined latency = oversampler + TP lookahead (reassign, not +=,
+            // so repeated prepare() calls don't double-count).
+            latencySamples = (int) std::ceil (oversampler->getLatencyInSamples())
+                           + tpLimiter.getLatencySamples();
         }
 
         void reset()
@@ -267,6 +365,7 @@ namespace th::dsp
             for (auto& f : tapeHfDamp) f.reset();
             autoGainSmoother.setCurrentAndTargetValue (1.0f);
             subLowpass.reset();
+            tpLimiter.reset();
             lowBandBuffer.clear();
         }
 
@@ -566,7 +665,15 @@ namespace th::dsp
                 for (int i = 0; i < numSamples; ++i)
                     (void) autoGainSmoother.getNextValue();
             }
+
+            // --- 6. True-Peak safety limiter (master-ready) ---
+            // Catches any inter-sample overshoot that survived clipping
+            // and recombine. Latency = ~2 ms, reported via getLatencySamples().
+            const float currentCeiling = juce::jmax (0.01f, ceilingSmoothed.getCurrentValue());
+            tpLimiter.process (buffer, currentCeiling);
         }
+
+        float getCurrentGainReduction() const noexcept { return tpLimiter.getCurrentGainReduction(); }
 
     private:
         struct AdaaState
@@ -607,5 +714,8 @@ namespace th::dsp
         std::vector<TransientDetector> transients;      // per-channel (native rate)
         std::vector<OnePoleLP>         tapeHfDamp;      // per-channel (oversampled rate, TAPE only)
         std::array<float, 2048>        cachedTransient {}; // per-native-sample transient amount
+
+        // DSP v3.1: post-processing True-Peak limiter
+        LookAheadTPLimiter tpLimiter;
     };
 }

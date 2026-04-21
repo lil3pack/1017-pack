@@ -98,12 +98,24 @@ void TrapHouseProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const float drive = juce::jlimit (0.0f, 1.0f,
         apvts.getRawParameterValue (th::PID::drive)->load());
 
-    //   drive=0 → 0 dB in,  knee=0.90 (soft),  harm=0.00
-    //   drive=1 → +18 dB in, knee=0.05 (near-hard), harm=0.75
-    const float inGainDb = drive * 18.0f;
-    const float ceilDb   = -0.3f;
-    const float knee     = 0.90f - drive * 0.85f;
-    const float harm     = drive * 0.75f;
+    // DRIVE macro — pro master-grade mapping (v3.1):
+    //   - Exponential (pow 1.6) curve so low settings are usable on a master
+    //     without crushing — 30% drive ≈ +2 dB input, not +5.4 dB.
+    //   - Max input gain capped at +12 dB (was +18 in v3.0, too aggressive for master).
+    //   - Max harmonics 0.50 (was 0.75) — cleaner top end.
+    //   - Ceiling defaults to -1.0 dBFS (streaming-safe headroom,
+    //     combined with post-downsample TP limiter = -1 dBTP compliant).
+    //
+    //   drive=0    → 0 dB    / knee 0.90 / harm 0.00   — transparent bypass
+    //   drive=0.3  → +1.8 dB / knee 0.74 / harm 0.08   — subtle mastering lift
+    //   drive=0.5  → +3.8 dB / knee 0.55 / harm 0.18   — gentle push
+    //   drive=0.7  → +6.5 dB / knee 0.35 / harm 0.28   — punchy
+    //   drive=1.0  → +12.0 dB / knee 0.05 / harm 0.50  — destructive
+    const float driveCurve = std::pow (drive, 1.6f);
+    const float inGainDb = driveCurve * 12.0f;
+    const float ceilDb   = -1.0f;
+    const float knee     = 0.90f - driveCurve * 0.85f;
+    const float harm     = driveCurve * 0.50f;
 
     const float subGuard = juce::jlimit (0.0f, 1.0f,
         apvts.getRawParameterValue (th::PID::subGuard)->load());

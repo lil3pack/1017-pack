@@ -2,9 +2,21 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_extra/juce_gui_extra.h>
+#include <vector>
+#include <array>
 #include "PluginProcessor.h"
 #include "LookAndFeel1017.h"
 #include "ui/ScopeDisplay.h"
+
+// Particle struct for the knob/clip spark system
+struct Particle
+{
+    float x { 0 }, y { 0 };
+    float vx { 0 }, vy { 0 };
+    float life { 1.0f };
+    float size { 1.0f };
+    juce::Colour colour { juce::Colours::gold };
+};
 
 class TrapHouseEditor : public juce::AudioProcessorEditor,
                         private juce::Timer
@@ -37,6 +49,20 @@ private:
 
     // Animation phase (drives COMBO pulse + frame glow + anything tempo-synced)
     float wavePhase { 0.0f };
+
+    // --- 🔥 Transformation animation state ---
+    std::vector<Particle> particles;           // sparks / clip bursts
+    float screenShakeX   { 0.0f };
+    float screenShakeY   { 0.0f };
+    float lightningFlash { 0.0f };             // 0..1, decays each frame
+    int   stageTransitionTimer { 0 };          // frames remaining for level-up banner
+    juce::String stageTransitionText;
+    int   lastStage { 0 };                     // for detecting stage crossings
+    std::array<float, 32> freqSeed;            // pseudo-rand seeds for FFT bars
+    juce::Random rng;
+
+    void updateAnimation();                    // advance state (called from timer)
+    void spawnSparks (float kcxA, float kcxB, float kcy);
 
     using APVTS = juce::AudioProcessorValueTreeState;
     std::unique_ptr<APVTS::SliderAttachment>   driveAtt, subGuardAtt;
