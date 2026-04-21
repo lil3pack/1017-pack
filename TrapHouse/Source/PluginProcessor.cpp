@@ -37,7 +37,7 @@ APVTS::ParameterLayout TrapHouseProcessor::createLayout()
 
     params.push_back (std::make_unique<AudioParameterChoice> (
         ParameterID { th::PID::character, 1 }, "Character",
-        StringArray { "HARD", "TAPE", "TUBE" }, 1)); // TAPE default — warmest, master-friendly
+        StringArray { "HARD", "TAPE", "TUBE" }, 0)); // HARD default — most aggressive maximizer vibe
 
     params.push_back (std::make_unique<AudioParameterBool> (
         ParameterID { th::PID::autoGain, 1 }, "Auto Gain", true /* default ON */));
@@ -98,25 +98,25 @@ void TrapHouseProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const float drive = juce::jlimit (0.0f, 1.0f,
         apvts.getRawParameterValue (th::PID::drive)->load());
 
-    // DRIVE macro — pro master-grade mapping (v3.2, "warmth edition"):
-    //   - Input gain: exponential (pow 1.6) curve, max +12 dB — gentle on master.
-    //   - Harmonics: LINEAR curve (drive × 0.40) — gives consistent warmth
-    //     even at low DRIVE (important for master-bus use where 20-30% drive
-    //     should already add character, not be invisible).
-    //   - Knee: softens more gradually.
-    //   - Ceiling: -1.0 dBFS + TP limiter = -1 dBTP true-peak safe.
+    // DRIVE macro — v4 FATNESS ENGINE (Sausage Fattener / OneKnob Louder style):
     //
-    //   drive=0    → 0 dB    / knee 0.90 / harm 0.00   — transparent bypass
-    //   drive=0.2  → +0.8 dB / knee 0.80 / harm 0.08   — invisible warmth
-    //   drive=0.3  → +1.8 dB / knee 0.72 / harm 0.12   — subtle mastering lift
-    //   drive=0.5  → +3.8 dB / knee 0.55 / harm 0.20   — audible character
-    //   drive=0.7  → +6.5 dB / knee 0.35 / harm 0.28   — pushing
-    //   drive=1.0  → +12.0 dB / knee 0.05 / harm 0.40  — destroy mode
-    const float driveCurve = std::pow (drive, 1.6f);
-    const float inGainDb = driveCurve * 12.0f;
+    //   Each % of DRIVE drives an entire master-bus maximizer chain:
+    //   pre low-shelf, input gain, cascade saturation, hard clip, harmonic
+    //   enhance, post high-shelf, auto makeup, TP limiter.
+    //
+    //   drive=0    → 0 dB   / knee 0.95 / harm 0.00 / shelf 0     — bypass
+    //   drive=0.2  → +3 dB  / knee 0.80 / harm 0.14 / shelf 0.20  — warmth
+    //   drive=0.3  → +5 dB  / knee 0.71 / harm 0.21 / shelf 0.30  — glue
+    //   drive=0.5  → +9 dB  / knee 0.53 / harm 0.35 / shelf 0.50  — fat
+    //   drive=0.7  → +13 dB / knee 0.32 / harm 0.49 / shelf 0.70  — loud
+    //   drive=1.0  → +18 dB / knee 0.05 / harm 0.70 / shelf 1.0   — EXPLODE
+    //
+    //   Ceiling stays at -1.0 dBFS; post TP limiter guarantees -1 dBTP safe.
+    const float inGainDb = drive * 18.0f;
     const float ceilDb   = -1.0f;
-    const float knee     = 0.90f - driveCurve * 0.85f;
-    const float harm     = drive * 0.40f; // linear → more warmth at low settings
+    const float knee     = 0.95f - drive * 0.90f;
+    const float harm     = drive * 0.70f;
+    const float shelf    = drive;  // drives both pre low-shelf and post high-shelf
 
     const float subGuard = juce::jlimit (0.0f, 1.0f,
         apvts.getRawParameterValue (th::PID::subGuard)->load());
@@ -128,6 +128,7 @@ void TrapHouseProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     clipper.setCeilingDb   (ceilDb);
     clipper.setKnee        (knee);
     clipper.setHarmonics   (harm);
+    clipper.setShelfAmount (shelf);
     clipper.setSubGuard    (subGuard);
     clipper.setCharacter   (static_cast<th::dsp::ClipperCore::Character> (juce::jlimit (0, 2, charIdx)));
     clipper.setAutoGain    (autoG);

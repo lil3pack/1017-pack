@@ -151,6 +151,52 @@ namespace th::dsp
     };
 
     //==========================================================================
+    // Shelving filter wrapper (2-channel, JUCE IIR + ProcessorDuplicator).
+    // Used for pre-EQ low-shelf boost and post-EQ high-shelf "air" boost —
+    // the key ingredient that makes one-knob maximizers (Sausage Fattener,
+    // OneKnob Louder) sound "fat" rather than just "distorted".
+    //==========================================================================
+    class ShelvingFilter
+    {
+    public:
+        enum class Type { LowShelf, HighShelf };
+
+        void prepare (double sr, int numChannels, int maxBlockSize, Type t)
+        {
+            sampleRate = sr;
+            type = t;
+            juce::dsp::ProcessSpec spec { sr, (juce::uint32) maxBlockSize,
+                                          (juce::uint32) juce::jmax (1, numChannels) };
+            filter.prepare (spec);
+            setParameters (t == Type::LowShelf ? 120.0f : 6000.0f, 0.0f);
+        }
+
+        void reset() { filter.reset(); }
+
+        void setParameters (float freqHz, float gainDb)
+        {
+            const float gainLin = std::pow (10.0f, gainDb / 20.0f);
+            auto coeffs = (type == Type::LowShelf)
+                ? juce::dsp::IIR::Coefficients<float>::makeLowShelf  (sampleRate, freqHz, 0.707f, gainLin)
+                : juce::dsp::IIR::Coefficients<float>::makeHighShelf (sampleRate, freqHz, 0.707f, gainLin);
+            *filter.state = *coeffs;
+        }
+
+        void process (juce::AudioBuffer<float>& buffer)
+        {
+            juce::dsp::AudioBlock<float> block (buffer);
+            juce::dsp::ProcessContextReplacing<float> ctx (block);
+            filter.process (ctx);
+        }
+
+    private:
+        juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+                                        juce::dsp::IIR::Coefficients<float>> filter;
+        double sampleRate { 48000.0 };
+        Type type { Type::LowShelf };
+    };
+
+    //==========================================================================
     // Look-ahead True-Peak limiter (post-downsample safety net).
     //
     // Adds ~2 ms of latency but guarantees that the final output never exceeds
@@ -353,6 +399,14 @@ namespace th::dsp
             // DSP v3.1: post-processing True-Peak limiter (master-ready)
             tpLimiter.prepare (sampleRate, nCh, maxBlockSize);
 
+            // DSP v4: Shelving EQ pre + post (Sausage Fattener style)
+            cachedSampleRate = sampleRate;
+            lowShelf .prepare (sampleRate, nCh, maxBlockSize, ShelvingFilter::Type::LowShelf);
+            highShelf.prepare (sampleRate, nCh, maxBlockSize, ShelvingFilter::Type::HighShelf);
+            shelfAmount01 = 0.0f;
+            lowShelf .setParameters (120.0f, 0.0f);
+            highShelf.setParameters (6500.0f, 0.0f);
+
             // Combined latency = oversampler + TP lookahead (reassign, not +=,
             // so repeated prepare() calls don't double-count).
             latencySamples = (int) std::ceil (oversampler->getLatencyInSamples())
@@ -372,6 +426,8 @@ namespace th::dsp
             trAmtSmoother  .setCurrentAndTargetValue (0.0f);
             subLowpass.reset();
             tpLimiter.reset();
+            lowShelf .reset();
+            highShelf.reset();
             lowBandBuffer.clear();
         }
 
@@ -385,6 +441,18 @@ namespace th::dsp
         void setSubGuard    (float norm01)  { subGuardSmoothed .setTargetValue (juce::jlimit (0.0f, 1.0f, norm01)); }
         void setCharacter   (Character c)   { character = c; }
         void setAutoGain    (bool on)       { autoGain = on; }
+
+        // v4: Sausage Fattener-style shelving EQ amount (0..1, driven by DRIVE)
+        // Pre: low-shelf boost @ 120 Hz up to +4 dB (thump / weight)
+        // Post: high-shelf boost @ 6.5 kHz up to +2.5 dB (air / presence)
+        void setShelfAmount (float norm01)
+        {
+            const float v = juce::jlimit (0.0f, 1.0f, norm01);
+            if (std::abs (v - shelfAmount01) < 1.0e-4f) return;
+            shelfAmount01 = v;
+            lowShelf .setParameters (120.0f,  v * 4.0f);
+            highShelf.setParameters (6500.0f, v * 2.5f);
+        }
 
         void process (juce::AudioBuffer<float>& buffer)
         {
@@ -404,6 +472,14 @@ namespace th::dsp
                         dryRmsSum += follower.process (d[i]);
                 }
             }
+
+            // --- 1.1 PRE-EQ: Low-shelf boost (Sausage Fattener-style weight/thump) ---
+            // Runs at native rate on the DRY input before oversampling +
+            // clipping, so the boosted lows feed into the saturator
+            // and generate fat harmonics. This is the #1 thing that makes
+            // maximizers sound "fat" instead of "distorted".
+            if (shelfAmount01 > 1.0e-4f)
+                lowShelf.process (buffer);
 
             // --- 1.25 Transient detection (native rate, pre-oversample) ---
             // For each incoming native sample, compute a 0-1 "transient amount".
@@ -638,6 +714,13 @@ namespace th::dsp
                 }
             }
 
+            // --- 4.7 POST-EQ: High-shelf air / presence boost ---
+            // After clipping/harmonic injection: adds a gentle "sparkle" to
+            // the top end. Combined with the pre low-shelf boost, this gives
+            // the Sausage Fattener-style smile curve that makes beats pop.
+            if (shelfAmount01 > 1.0e-4f)
+                highShelf.process (buffer);
+
             // --- 5. Auto-gain RMS makeup ---
             if (autoGain)
             {
@@ -729,5 +812,11 @@ namespace th::dsp
 
         // DSP v3.1: post-processing True-Peak limiter
         LookAheadTPLimiter tpLimiter;
+
+        // DSP v4: Sausage-Fattener-style shelving EQ (pre-low, post-high)
+        ShelvingFilter lowShelf;
+        ShelvingFilter highShelf;
+        float shelfAmount01 { 0.0f };
+        double cachedSampleRate { 48000.0 };
     };
 }
