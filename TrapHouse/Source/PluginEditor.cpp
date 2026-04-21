@@ -1,71 +1,53 @@
 #include "PluginEditor.h"
 
-namespace
+//==============================================================================
+static const LookAndFeel1017::Palette& pal (LookAndFeel1017& lnf) { return lnf.getPalette(); }
+
+//==============================================================================
+void TrapHouseEditor::setupKnob (juce::Slider& k)
 {
-    // 1017 palette (matches the Nano Banana mockup)
-    const juce::Colour bgDeep     { 0xFF1A0F2B };
-    const juce::Colour bgMid      { 0xFF2B1A3D };
-    const juce::Colour purpleLean { 0xFF6B3FA0 };
-    const juce::Colour purpleHi   { 0xFF9B6FD9 };
-    const juce::Colour gold       { 0xFFD4AF37 };
-    const juce::Colour goldHi     { 0xFFF4D03F };
-    const juce::Colour cream      { 0xFFF5E9D1 };
-
-    void setupKnob (juce::Slider& k)
-    {
-        k.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-        k.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 70, 18);
-        k.setColour (juce::Slider::rotarySliderFillColourId, gold);
-        k.setColour (juce::Slider::rotarySliderOutlineColourId, purpleLean);
-        k.setColour (juce::Slider::thumbColourId, purpleHi);
-        k.setColour (juce::Slider::textBoxTextColourId, cream);
-        k.setColour (juce::Slider::textBoxBackgroundColourId, bgDeep);
-        k.setColour (juce::Slider::textBoxOutlineColourId, gold.withAlpha (0.4f));
-    }
-
-    void setupLabel (juce::Label& l, const juce::String& text, juce::Component& target)
-    {
-        l.setText (text, juce::dontSendNotification);
-        l.setJustificationType (juce::Justification::centred);
-        l.setColour (juce::Label::textColourId, gold);
-        l.attachToComponent (&target, false);
-    }
+    k.setSliderStyle (juce::Slider::RotaryVerticalDrag);
+    k.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f,
+                           juce::MathConstants<float>::pi * 2.75f, true);
+    k.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 74, 20);
+    k.setVelocityBasedMode (true);
+    k.setVelocityModeParameters (0.7, 1, 0.08, false);
+    k.setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
+    addAndMakeVisible (k);
 }
 
+//==============================================================================
 TrapHouseEditor::TrapHouseEditor (TrapHouseProcessor& p)
     : AudioProcessorEditor (&p), processorRef (p)
 {
-    setSize (720, 420);
+    setLookAndFeel (&lookAndFeel);
+    setSize (820, 480);
 
-    using APVTS = juce::AudioProcessorValueTreeState;
     auto& apvts = processorRef.getAPVTS();
 
-    setupKnob (inputGainKnob); addAndMakeVisible (inputGainKnob);
-    setupKnob (ceilingKnob);   addAndMakeVisible (ceilingKnob);
-    setupKnob (kneeKnob);      addAndMakeVisible (kneeKnob);
-    setupKnob (harmonicsKnob); addAndMakeVisible (harmonicsKnob);
+    setupKnob (inputGainKnob);
+    setupKnob (ceilingKnob);
+    setupKnob (kneeKnob);
+    setupKnob (harmonicsKnob);
 
-    setupLabel (inputGainLbl, "INPUT GAIN", inputGainKnob);
-    setupLabel (ceilingLbl,   "CEILING",    ceilingKnob);
-    setupLabel (kneeLbl,      "SOFT KNEE",  kneeKnob);
-    setupLabel (harmonicsLbl, "HARMONICS",  harmonicsKnob);
+    // Double-click to return to each parameter's stored default
+    inputGainKnob.setDoubleClickReturnValue (true, 0.0);
+    ceilingKnob  .setDoubleClickReturnValue (true, -0.3);
+    kneeKnob     .setDoubleClickReturnValue (true, 0.25);
+    harmonicsKnob.setDoubleClickReturnValue (true, 0.40);
 
-    addAndMakeVisible (characterBox);
+    // Character combo (HARD/TAPE/TUBE)
     characterBox.addItemList ({ "HARD", "TAPE", "TUBE" }, 1);
-    characterBox.setColour (juce::ComboBox::backgroundColourId, bgDeep);
-    characterBox.setColour (juce::ComboBox::textColourId, gold);
-    characterBox.setColour (juce::ComboBox::arrowColourId, gold);
-    characterBox.setColour (juce::ComboBox::outlineColourId, gold.withAlpha (0.5f));
+    addAndMakeVisible (characterBox);
+
+    // Preset placeholder (will be wired next session)
+    presetBox.addItem ("PRESET", 1);
+    presetBox.setSelectedId (1, juce::dontSendNotification);
+    addAndMakeVisible (presetBox);
 
     addAndMakeVisible (autoGainBtn);
-    autoGainBtn.setColour (juce::ToggleButton::textColourId, cream);
-    autoGainBtn.setColour (juce::ToggleButton::tickColourId, goldHi);
-
     addAndMakeVisible (bypassBtn);
-    bypassBtn.setColour (juce::ToggleButton::textColourId, cream);
-    bypassBtn.setColour (juce::ToggleButton::tickColourId, goldHi);
 
-    // Attachments
     inputGainAtt = std::make_unique<APVTS::SliderAttachment>   (apvts, th::PID::inputGain, inputGainKnob);
     ceilingAtt   = std::make_unique<APVTS::SliderAttachment>   (apvts, th::PID::ceiling,   ceilingKnob);
     kneeAtt      = std::make_unique<APVTS::SliderAttachment>   (apvts, th::PID::knee,      kneeKnob);
@@ -80,90 +62,161 @@ TrapHouseEditor::TrapHouseEditor (TrapHouseProcessor& p)
 TrapHouseEditor::~TrapHouseEditor()
 {
     stopTimer();
+    setLookAndFeel (nullptr);
 }
 
+//==============================================================================
 void TrapHouseEditor::paint (juce::Graphics& g)
 {
-    // Background gradient (matches mockup)
-    juce::ColourGradient bg (bgDeep, 0.0f, 0.0f,
-                             bgMid,  (float) getWidth(), (float) getHeight(), false);
+    const auto& P = pal (lookAndFeel);
+
+    // ----- Background: purple glass gradient -----
+    juce::ColourGradient bg (P.bgDeep, 0.0f, 0.0f,
+                             P.bgMid,  (float) getWidth(), (float) getHeight(), false);
     g.setGradientFill (bg);
     g.fillAll();
 
-    // Title
-    g.setColour (gold);
-    g.setFont (juce::Font (34.0f, juce::Font::bold));
-    g.drawFittedText ("TRAP HOUSE", 0, 10, getWidth(), 40, juce::Justification::centred, 1);
+    // ----- Thin gold frame -----
+    g.setColour (P.gold.withAlpha (0.35f));
+    g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (8.0f), 14.0f, 1.2f);
 
-    g.setColour (cream);
-    g.setFont (juce::Font (12.0f));
-    g.drawFittedText ("1017 SERIES / HARD CLIPPER", 0, 50, getWidth(), 16, juce::Justification::centred, 1);
+    // ----- Title -----
+    g.setColour (P.gold);
+    g.setFont (juce::Font (40.0f, juce::Font::bold));
+    g.drawFittedText ("TRAP HOUSE", 0, 18, getWidth(), 44,
+                      juce::Justification::centred, 1);
 
-    // Meter area background
-    auto meterArea = juce::Rectangle<int> (40, 90, getWidth() - 80, 40);
-    g.setColour (bgDeep);
-    g.fillRoundedRectangle (meterArea.toFloat(), 6.0f);
-    g.setColour (gold.withAlpha (0.4f));
-    g.drawRoundedRectangle (meterArea.toFloat(), 6.0f, 1.0f);
+    g.setColour (P.cream.withAlpha (0.8f));
+    g.setFont (juce::Font (11.0f, juce::Font::plain));
+    g.drawFittedText ("1017 SERIES / HARD CLIPPER", 0, 62, getWidth(), 14,
+                      juce::Justification::centred, 1);
 
-    // Draw meters (horizontal, gold -> red gradient)
-    auto drawMeter = [&] (juce::Rectangle<int> r, float level01, const juce::String& label)
+    // ----- Display area (meter + ceiling lines, placeholder for scope) -----
+    auto displayArea = juce::Rectangle<int> (30, 90, getWidth() - 130, 170);
+    g.setColour (P.bgDeep.darker (0.3f));
+    g.fillRoundedRectangle (displayArea.toFloat(), 8.0f);
+    g.setColour (P.gold.withAlpha (0.4f));
+    g.drawRoundedRectangle (displayArea.toFloat(), 8.0f, 1.0f);
+
+    // Faint grid
+    g.setColour (P.purpleLean.withAlpha (0.15f));
+    for (int i = 1; i < 8; ++i)
     {
-        g.setColour (cream);
-        g.setFont (10.0f);
-        g.drawText (label, r.removeFromLeft (30), juce::Justification::centredLeft);
+        const int gx = displayArea.getX() + displayArea.getWidth() * i / 8;
+        g.drawLine ((float) gx, (float) displayArea.getY() + 8,
+                    (float) gx, (float) displayArea.getBottom() - 40, 1.0f);
+    }
+    for (int i = 1; i < 4; ++i)
+    {
+        const int gy = displayArea.getY() + (displayArea.getHeight() - 40) * i / 4;
+        g.drawLine ((float) displayArea.getX() + 8, (float) gy,
+                    (float) displayArea.getRight() - 8, (float) gy, 1.0f);
+    }
 
-        const int filled = (int) (r.getWidth() * juce::jlimit (0.0f, 1.0f, level01));
-        juce::ColourGradient grad (gold, (float) r.getX(), 0.0f,
-                                   juce::Colours::red, (float) r.getRight(), 0.0f, false);
-        grad.addColour (0.7, juce::Colours::orange);
-        g.setGradientFill (grad);
-        g.fillRect (r.withWidth (filled));
+    // Ceiling dashed lines (top & bottom)
+    const float ceilingNorm = juce::jlimit (
+        0.05f, 1.0f,
+        juce::Decibels::decibelsToGain (processorRef.getAPVTS()
+            .getRawParameterValue (th::PID::ceiling)->load()));
+    const float centerY = (float) displayArea.getCentreY() - 20.0f;
+    const float halfH   = (float) (displayArea.getHeight() - 50) * 0.5f * ceilingNorm;
+    const float dashes[] = { 6.0f, 4.0f };
+    g.setColour (P.gold.withAlpha (0.75f));
+    g.drawDashedLine ({ (float) displayArea.getX() + 10, centerY - halfH,
+                        (float) displayArea.getRight() - 10, centerY - halfH },
+                      dashes, 2, 1.5f);
+    g.drawDashedLine ({ (float) displayArea.getX() + 10, centerY + halfH,
+                        (float) displayArea.getRight() - 10, centerY + halfH },
+                      dashes, 2, 1.5f);
 
-        g.setColour (bgDeep.brighter (0.1f));
-        g.drawRect (r, 1);
-    };
+    // Live waveform placeholder — horizontal lines showing input vs output
+    const float mid = centerY;
+    g.setColour (P.purpleHi.withAlpha (0.65f));
+    const float inAmp  = juce::jmin (1.0f, inMeter * 2.0f);
+    const float outAmp = juce::jmin (1.0f, outMeter * 2.0f);
+    g.fillRect (juce::Rectangle<float> ((float) displayArea.getX() + 10,
+                                         mid - halfH * outAmp,
+                                         (float) displayArea.getWidth() - 20,
+                                         halfH * outAmp * 2.0f + 1.0f));
+    juce::ignoreUnused (inAmp);
 
-    auto inMeterArea = meterArea.removeFromTop (18).reduced (6, 2);
-    drawMeter (inMeterArea, inMeter, "IN");
-    auto outMeterArea = meterArea.reduced (6, 2);
-    drawMeter (outMeterArea, outMeter, "OUT");
+    // ----- Meter bar (output peak) at bottom of display area -----
+    auto meterBar = juce::Rectangle<int> (displayArea.getX() + 8,
+                                          displayArea.getBottom() - 26,
+                                          displayArea.getWidth() - 16, 18);
+    g.setColour (P.bgDeep);
+    g.fillRoundedRectangle (meterBar.toFloat(), 3.0f);
 
-    // Footer
-    g.setColour (cream.withAlpha (0.5f));
-    g.setFont (10.0f);
+    const int maxW = meterBar.getWidth();
+    const int outW = (int) ((float) maxW * juce::jlimit (0.0f, 1.0f, outMeter));
+
+    juce::ColourGradient meter (P.gold, (float) meterBar.getX(), 0.0f,
+                                juce::Colours::red, (float) meterBar.getRight(), 0.0f, false);
+    meter.addColour (0.7, juce::Colours::orange);
+    g.setGradientFill (meter);
+    g.fillRoundedRectangle (meterBar.withWidth (outW).toFloat(), 2.0f);
+
+    g.setColour (P.cream);
+    g.setFont (8.5f);
+
+    // ----- Knob labels -----
+    g.setColour (P.gold);
+    g.setFont (juce::Font (11.0f, juce::Font::bold));
+
+    const int knobY = 290;
+    const int knobW = 130;
+    const int knobStart = 40;
+    const int knobGap = 20;
+
+    const juce::StringArray knobNames { "INPUT GAIN", "CEILING", "SOFT KNEE", "HARMONICS" };
+    for (int i = 0; i < 4; ++i)
+    {
+        const int x = knobStart + i * (knobW + knobGap);
+        g.drawText (knobNames[i], x, knobY - 22, knobW, 16, juce::Justification::centred);
+    }
+
+    // ----- Right side panel label -----
+    g.setFont (juce::Font (10.0f, juce::Font::bold));
+    g.drawText ("CHARACTER", getWidth() - 110, 98, 96, 14, juce::Justification::centred);
+
+    // ----- Footer -----
+    g.setColour (P.cream.withAlpha (0.4f));
+    g.setFont (9.5f);
     g.drawFittedText ("1017 DSP - MADE IN ZONE 6",
-                      0, getHeight() - 18, getWidth(), 14,
+                      0, getHeight() - 22, getWidth(), 14,
                       juce::Justification::centred, 1);
 }
 
 void TrapHouseEditor::resized()
 {
-    const int knobSize = 100;
-    const int knobY = 180;
-    const int spacing = (getWidth() - 4 * knobSize - 40 /* side panel */) / 5;
+    // Preset dropdown top-right
+    presetBox.setBounds (getWidth() - 110, 22, 92, 26);
 
-    int x = spacing;
-    inputGainKnob.setBounds (x, knobY, knobSize, knobSize); x += knobSize + spacing;
-    ceilingKnob  .setBounds (x, knobY, knobSize, knobSize); x += knobSize + spacing;
-    kneeKnob     .setBounds (x, knobY, knobSize, knobSize); x += knobSize + spacing;
-    harmonicsKnob.setBounds (x, knobY, knobSize, knobSize);
+    // Right side panel: CHARACTER combo + AUTO GAIN + BYPASS
+    characterBox.setBounds (getWidth() - 108, 116, 96, 26);
+    autoGainBtn .setBounds (getWidth() - 110, 158, 104, 22);
+    bypassBtn   .setBounds (getWidth() - 110, 186, 104, 22);
 
-    // Right side panel
-    const int sideX = getWidth() - 70;
-    characterBox.setBounds (sideX - 10, 100, 80, 22);
-    autoGainBtn .setBounds (sideX - 20, 140, 100, 22);
-    bypassBtn   .setBounds (sideX - 20, 170, 100, 22);
+    // 4 knobs row
+    const int knobY = 290;
+    const int knobW = 130;
+    const int knobH = 130;
+    const int startX = 40;
+    const int gap = 20;
+
+    inputGainKnob.setBounds (startX + 0 * (knobW + gap), knobY, knobW, knobH);
+    ceilingKnob  .setBounds (startX + 1 * (knobW + gap), knobY, knobW, knobH);
+    kneeKnob     .setBounds (startX + 2 * (knobW + gap), knobY, knobW, knobH);
+    harmonicsKnob.setBounds (startX + 3 * (knobW + gap), knobY, knobW, knobH);
 }
 
 void TrapHouseEditor::timerCallback()
 {
-    // Cheap peak-hold smoothing toward current RMS
     const float inTarget  = processorRef.inputRms.load();
     const float outTarget = processorRef.outputRms.load();
 
-    inMeter  = std::max (inMeter  * 0.82f, inTarget);
-    outMeter = std::max (outMeter * 0.82f, outTarget);
+    inMeter  = juce::jmax (inMeter  * 0.88f, inTarget);
+    outMeter = juce::jmax (outMeter * 0.88f, outTarget);
 
     repaint();
 }

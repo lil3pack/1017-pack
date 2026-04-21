@@ -3,12 +3,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "PluginProcessor.h"
+#include "LookAndFeel1017.h"
 
-/**
- * Placeholder editor — lays out the controls in the right slots so we can
- * build & test the DSP end-to-end, then swap in the custom LookAndFeel1017
- * (purple + gold from the Nano Banana mockups) without changing any layout logic.
- */
 class TrapHouseEditor : public juce::AudioProcessorEditor,
                         private juce::Timer
 {
@@ -21,17 +17,18 @@ public:
 
 private:
     void timerCallback() override;
+    void setupKnob (juce::Slider& k);
 
     TrapHouseProcessor& processorRef;
+    LookAndFeel1017 lookAndFeel;
 
     // Controls
     juce::Slider inputGainKnob, ceilingKnob, kneeKnob, harmonicsKnob;
-    juce::Label  inputGainLbl,  ceilingLbl,  kneeLbl,  harmonicsLbl;
-    juce::ComboBox characterBox;
-    juce::ToggleButton autoGainBtn { "Auto Gain" };
-    juce::ToggleButton bypassBtn   { "Bypass" };
+    juce::ComboBox characterBox, presetBox;
+    juce::ToggleButton autoGainBtn { "AUTO GAIN" };
+    juce::ToggleButton bypassBtn   { "BYPASS" };
 
-    // Meters (simple bars for now, proper skin later)
+    // Meter state
     float inMeter  { 0.0f };
     float outMeter { 0.0f };
 
