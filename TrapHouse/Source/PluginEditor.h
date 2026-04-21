@@ -23,8 +23,8 @@ private:
     TrapHouseProcessor& processorRef;
     LookAndFeel1017 lookAndFeel;
 
-    // Controls
-    juce::Slider inputGainKnob, ceilingKnob, kneeKnob, harmonicsKnob;
+    // Controls — macro DRIVE + SUB GUARD
+    juce::Slider driveKnob, subGuardKnob;
     juce::ComboBox characterBox, presetBox;
     juce::ToggleButton autoGainBtn { "AUTO GAIN" };
     juce::ToggleButton bypassBtn   { "BYPASS" };
@@ -32,12 +32,11 @@ private:
     // Oscilloscope
     th::ui::ScopeDisplay scope;
 
-    // Meter state
-    float inMeter  { 0.0f };
+    // Meters
     float outMeter { 0.0f };
 
     using APVTS = juce::AudioProcessorValueTreeState;
-    std::unique_ptr<APVTS::SliderAttachment>   inputGainAtt, ceilingAtt, kneeAtt, harmonicsAtt;
+    std::unique_ptr<APVTS::SliderAttachment>   driveAtt, subGuardAtt;
     std::unique_ptr<APVTS::ComboBoxAttachment> characterAtt;
     std::unique_ptr<APVTS::ButtonAttachment>   autoGainAtt, bypassAtt;
 

@@ -17,35 +17,19 @@ APVTS::ParameterLayout TrapHouseProcessor::createLayout()
 
     std::vector<std::unique_ptr<RangedAudioParameter>> params;
 
+    // DRIVE — macro 0-100%, internally maps to (input gain, knee, harmonics).
     params.push_back (std::make_unique<AudioParameterFloat> (
-        ParameterID { th::PID::inputGain, 1 }, "Input Gain",
-        NormalisableRange<float> (-12.0f, 24.0f, 0.1f), 0.0f,
-        AudioParameterFloatAttributes()
-            .withLabel ("dB")
-            .withStringFromValueFunction ([] (float v, int) {
-                return juce::String (v, 1) + " dB";
-            })));
-
-    params.push_back (std::make_unique<AudioParameterFloat> (
-        ParameterID { th::PID::ceiling, 1 }, "Ceiling",
-        NormalisableRange<float> (-12.0f, 0.0f, 0.1f), -0.3f,
-        AudioParameterFloatAttributes()
-            .withLabel ("dB")
-            .withStringFromValueFunction ([] (float v, int) {
-                return juce::String (v, 1) + " dB";
-            })));
-
-    params.push_back (std::make_unique<AudioParameterFloat> (
-        ParameterID { th::PID::knee, 1 }, "Soft Knee",
-        NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.25f,
+        ParameterID { th::PID::drive, 1 }, "Drive",
+        NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.35f,
         AudioParameterFloatAttributes()
             .withStringFromValueFunction ([] (float v, int) {
                 return juce::String ((int) std::round (v * 100.0f)) + "%";
             })));
 
+    // SUB GUARD — 0% = standard clip, 100% = sub-bass (<120 Hz) stays untouched.
     params.push_back (std::make_unique<AudioParameterFloat> (
-        ParameterID { th::PID::harmonics, 1 }, "Harmonics",
-        NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.40f,
+        ParameterID { th::PID::subGuard, 1 }, "Sub Guard",
+        NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f,
         AudioParameterFloatAttributes()
             .withStringFromValueFunction ([] (float v, int) {
                 return juce::String ((int) std::round (v * 100.0f)) + "%";
@@ -56,7 +40,7 @@ APVTS::ParameterLayout TrapHouseProcessor::createLayout()
         StringArray { "HARD", "TAPE", "TUBE" }, 0));
 
     params.push_back (std::make_unique<AudioParameterBool> (
-        ParameterID { th::PID::autoGain, 1 }, "Auto Gain", false));
+        ParameterID { th::PID::autoGain, 1 }, "Auto Gain", true /* default ON */));
 
     params.push_back (std::make_unique<AudioParameterBool> (
         ParameterID { th::PID::bypass, 1 }, "Bypass", false));
@@ -106,18 +90,32 @@ void TrapHouseProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     if (apvts.getRawParameterValue (th::PID::bypass)->load() > 0.5f)
         return;
 
-    // Pull current parameter values
-    const float inGainDb = apvts.getRawParameterValue (th::PID::inputGain)->load();
-    const float ceilDb   = apvts.getRawParameterValue (th::PID::ceiling)->load();
-    const float knee     = apvts.getRawParameterValue (th::PID::knee)->load();
-    const float harm     = apvts.getRawParameterValue (th::PID::harmonics)->load();
-    const int   charIdx  = (int) apvts.getRawParameterValue (th::PID::character)->load();
-    const bool  autoG    = apvts.getRawParameterValue (th::PID::autoGain)->load() > 0.5f;
+    // --- DRIVE macro mapping ---
+    // Single knob that drives input gain, knee morph, and harmonic richness.
+    // Ceiling stays fixed at -0.3 dBFS under the hood (mastering-friendly
+    // default; a true peak would need intersample detection which is a
+    // future enhancement).
+    const float drive = juce::jlimit (0.0f, 1.0f,
+        apvts.getRawParameterValue (th::PID::drive)->load());
+
+    //   drive=0 → 0 dB in,  knee=0.90 (soft),  harm=0.00
+    //   drive=1 → +18 dB in, knee=0.05 (near-hard), harm=0.75
+    const float inGainDb = drive * 18.0f;
+    const float ceilDb   = -0.3f;
+    const float knee     = 0.90f - drive * 0.85f;
+    const float harm     = drive * 0.75f;
+
+    const float subGuard = juce::jlimit (0.0f, 1.0f,
+        apvts.getRawParameterValue (th::PID::subGuard)->load());
+
+    const int  charIdx = (int) apvts.getRawParameterValue (th::PID::character)->load();
+    const bool autoG   = apvts.getRawParameterValue (th::PID::autoGain)->load() > 0.5f;
 
     clipper.setInputGainDb (inGainDb);
     clipper.setCeilingDb   (ceilDb);
     clipper.setKnee        (knee);
     clipper.setHarmonics   (harm);
+    clipper.setSubGuard    (subGuard);
     clipper.setCharacter   (static_cast<th::dsp::ClipperCore::Character> (juce::jlimit (0, 2, charIdx)));
     clipper.setAutoGain    (autoG);
 

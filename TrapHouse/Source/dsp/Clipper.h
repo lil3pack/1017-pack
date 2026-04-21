@@ -134,6 +134,8 @@ namespace th::dsp
     public:
         enum class Character { Hard = 0, Tape, Tube };
 
+        static constexpr float subGuardCrossoverHz = 120.0f;
+
         void prepare (double sampleRate, int maxBlockSize, int numChannels)
         {
             oversampler = std::make_unique<juce::dsp::Oversampling<float>> (
@@ -152,6 +154,7 @@ namespace th::dsp
             ceilingSmoothed   .reset (osRate, 0.04);
             kneeSmoothed      .reset (osRate, 0.04);
             harmonicsSmoothed .reset (osRate, 0.04);
+            subGuardSmoothed  .reset (sampleRate, 0.04); // operates at native rate
 
             const int nCh = juce::jmax (1, numChannels);
             dcBlocker.resize ((size_t) nCh);
@@ -166,6 +169,18 @@ namespace th::dsp
 
             autoGainSmoother.reset (sampleRate, 0.200);
             autoGainSmoother.setCurrentAndTargetValue (1.0f);
+
+            // SUB GUARD crossover filter — 4th order Linkwitz-Riley LP @ 120 Hz
+            juce::dsp::ProcessSpec nativeSpec { sampleRate,
+                                                (juce::uint32) maxBlockSize,
+                                                (juce::uint32) nCh };
+            subLowpass.prepare (nativeSpec);
+            subLowpass.setType (juce::dsp::LinkwitzRileyFilterType::lowpass);
+            subLowpass.setCutoffFrequency (subGuardCrossoverHz);
+
+            // Scratch buffer for the low-band (allocated once, re-used)
+            lowBandBuffer.setSize (nCh, maxBlockSize, false, false, true);
+            lowBandBuffer.clear();
         }
 
         void reset()
@@ -176,6 +191,8 @@ namespace th::dsp
             for (auto& r : inRms)  r.reset();
             for (auto& r : outRms) r.reset();
             autoGainSmoother.setCurrentAndTargetValue (1.0f);
+            subLowpass.reset();
+            lowBandBuffer.clear();
         }
 
         int getLatencySamples() const noexcept { return latencySamples; }
@@ -185,6 +202,7 @@ namespace th::dsp
         void setCeilingDb   (float db)      { ceilingSmoothed  .setTargetValue (juce::Decibels::decibelsToGain (db)); }
         void setKnee        (float norm01)  { kneeSmoothed     .setTargetValue (juce::jlimit (0.0f, 1.0f, norm01)); }
         void setHarmonics   (float norm01)  { harmonicsSmoothed.setTargetValue (juce::jlimit (0.0f, 1.0f, norm01)); }
+        void setSubGuard    (float norm01)  { subGuardSmoothed .setTargetValue (juce::jlimit (0.0f, 1.0f, norm01)); }
         void setCharacter   (Character c)   { character = c; }
         void setAutoGain    (bool on)       { autoGain = on; }
 
@@ -204,6 +222,45 @@ namespace th::dsp
                     auto& follower = inRms[(size_t) juce::jmin (ch, (int) inRms.size() - 1)];
                     for (int i = 0; i < numSamples; ++i)
                         dryRmsSum += follower.process (d[i]);
+                }
+            }
+
+            // --- 1.5 SUB GUARD split (at native rate, before oversampling) ---
+            // low = LP(120 Hz, LR4) of input
+            // Modify buffer: buffer = high + low * (1 - sg)   [goes into clipper]
+            // We'll add back "low * sg" AFTER the clipper (post-downsample).
+            //
+            // sg=0 : clipper sees original (low+high = x). Classic behavior.
+            // sg=1 : clipper sees only high, low is preserved bit-perfect.
+            float sgForMix = 0.0f;
+            {
+                // Copy the input to lowBandBuffer, then LPF it
+                const int nCh = juce::jmin (numChannels, lowBandBuffer.getNumChannels());
+                lowBandBuffer.setSize (numChannels, numSamples, false, false, true);
+                for (int ch = 0; ch < nCh; ++ch)
+                    lowBandBuffer.copyFrom (ch, 0, buffer, ch, 0, numSamples);
+
+                juce::dsp::AudioBlock<float> lowBlock (lowBandBuffer);
+                juce::dsp::ProcessContextReplacing<float> lowCtx (lowBlock);
+                subLowpass.process (lowCtx);
+
+                // Pre-read the smoothed sub-guard once per block for the recombine step.
+                sgForMix = subGuardSmoothed.getNextValue();
+                subGuardSmoothed.skip (numSamples - 1);
+                sgForMix = juce::jlimit (0.0f, 1.0f, sgForMix);
+
+                // Pre-clipper signal: buffer = buffer - low * sg
+                //                           = (low + high) - low * sg
+                //                           = high + low * (1 - sg)
+                if (sgForMix > 0.0f)
+                {
+                    for (int ch = 0; ch < nCh; ++ch)
+                    {
+                        auto* b  = buffer.getWritePointer (ch);
+                        const auto* l = lowBandBuffer.getReadPointer (ch);
+                        for (int i = 0; i < numSamples; ++i)
+                            b[i] -= l[i] * sgForMix;
+                    }
                 }
             }
 
@@ -345,6 +402,19 @@ namespace th::dsp
             // --- 4. Downsample ---
             oversampler->processSamplesDown (block);
 
+            // --- 4.5 SUB GUARD recombine: add back low * sg ---
+            if (sgForMix > 0.0f)
+            {
+                const int nCh = juce::jmin (numChannels, lowBandBuffer.getNumChannels());
+                for (int ch = 0; ch < nCh; ++ch)
+                {
+                    auto* b  = buffer.getWritePointer (ch);
+                    const auto* l = lowBandBuffer.getReadPointer (ch);
+                    for (int i = 0; i < numSamples; ++i)
+                        b[i] += l[i] * sgForMix;
+                }
+            }
+
             // --- 5. Auto-gain RMS makeup ---
             if (autoGain)
             {
@@ -398,6 +468,7 @@ namespace th::dsp
         juce::LinearSmoothedValue<float> ceilingSmoothed   { 1.0f };
         juce::LinearSmoothedValue<float> kneeSmoothed      { 0.25f };
         juce::LinearSmoothedValue<float> harmonicsSmoothed { 0.40f };
+        juce::LinearSmoothedValue<float> subGuardSmoothed  { 0.0f };
 
         Character character { Character::Hard };
         bool autoGain { false };
@@ -406,6 +477,10 @@ namespace th::dsp
         std::vector<DCBlocker> dcBlocker;
         std::vector<RmsFollower> inRms, outRms;
         juce::LinearSmoothedValue<float> autoGainSmoother { 1.0f };
+
+        // SUB GUARD dual-band state
+        juce::dsp::LinkwitzRileyFilter<float> subLowpass;
+        juce::AudioBuffer<float> lowBandBuffer;
 
         // Per-sample cache so L/R share smoothed values (oversampled block).
         std::array<float, 8192> cachedInGain  {};

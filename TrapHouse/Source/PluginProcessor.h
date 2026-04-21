@@ -7,13 +7,13 @@
 namespace th
 {
     // Parameter IDs — kept in one place so UI and DSP never drift.
+    // The plugin now uses a macro DRIVE knob + SUB GUARD dual-band, instead
+    // of exposing the low-level input/ceiling/knee/harmonics knobs directly.
     namespace PID
     {
-        inline constexpr auto inputGain = "input_gain";
-        inline constexpr auto ceiling   = "ceiling";
-        inline constexpr auto knee      = "soft_knee";
-        inline constexpr auto harmonics = "harmonics";
-        inline constexpr auto character = "character";
+        inline constexpr auto drive     = "drive";      // macro 0-1
+        inline constexpr auto subGuard  = "sub_guard";  // dual-band amount 0-1
+        inline constexpr auto character = "character";  // HARD / TAPE / TUBE
         inline constexpr auto autoGain  = "auto_gain";
         inline constexpr auto bypass    = "bypass";
     }
