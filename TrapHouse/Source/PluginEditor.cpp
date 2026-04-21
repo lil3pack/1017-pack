@@ -18,12 +18,16 @@ void TrapHouseEditor::setupKnob (juce::Slider& k)
 
 //==============================================================================
 TrapHouseEditor::TrapHouseEditor (TrapHouseProcessor& p)
-    : AudioProcessorEditor (&p), processorRef (p)
+    : AudioProcessorEditor (&p),
+      processorRef (p),
+      scope (p.scopeBuffer, lookAndFeel)
 {
     setLookAndFeel (&lookAndFeel);
     setSize (820, 480);
 
     auto& apvts = processorRef.getAPVTS();
+
+    addAndMakeVisible (scope);
 
     setupKnob (inputGainKnob);
     setupKnob (ceilingKnob);
@@ -91,59 +95,8 @@ void TrapHouseEditor::paint (juce::Graphics& g)
     g.drawFittedText ("1017 SERIES / HARD CLIPPER", 0, 62, getWidth(), 14,
                       juce::Justification::centred, 1);
 
-    // ----- Display area (meter + ceiling lines, placeholder for scope) -----
-    auto displayArea = juce::Rectangle<int> (30, 90, getWidth() - 130, 170);
-    g.setColour (P.bgDeep.darker (0.3f));
-    g.fillRoundedRectangle (displayArea.toFloat(), 8.0f);
-    g.setColour (P.gold.withAlpha (0.4f));
-    g.drawRoundedRectangle (displayArea.toFloat(), 8.0f, 1.0f);
-
-    // Faint grid
-    g.setColour (P.purpleLean.withAlpha (0.15f));
-    for (int i = 1; i < 8; ++i)
-    {
-        const int gx = displayArea.getX() + displayArea.getWidth() * i / 8;
-        g.drawLine ((float) gx, (float) displayArea.getY() + 8,
-                    (float) gx, (float) displayArea.getBottom() - 40, 1.0f);
-    }
-    for (int i = 1; i < 4; ++i)
-    {
-        const int gy = displayArea.getY() + (displayArea.getHeight() - 40) * i / 4;
-        g.drawLine ((float) displayArea.getX() + 8, (float) gy,
-                    (float) displayArea.getRight() - 8, (float) gy, 1.0f);
-    }
-
-    // Ceiling dashed lines (top & bottom)
-    const float ceilingNorm = juce::jlimit (
-        0.05f, 1.0f,
-        juce::Decibels::decibelsToGain (processorRef.getAPVTS()
-            .getRawParameterValue (th::PID::ceiling)->load()));
-    const float centerY = (float) displayArea.getCentreY() - 20.0f;
-    const float halfH   = (float) (displayArea.getHeight() - 50) * 0.5f * ceilingNorm;
-    const float dashes[] = { 6.0f, 4.0f };
-    g.setColour (P.gold.withAlpha (0.75f));
-    g.drawDashedLine ({ (float) displayArea.getX() + 10, centerY - halfH,
-                        (float) displayArea.getRight() - 10, centerY - halfH },
-                      dashes, 2, 1.5f);
-    g.drawDashedLine ({ (float) displayArea.getX() + 10, centerY + halfH,
-                        (float) displayArea.getRight() - 10, centerY + halfH },
-                      dashes, 2, 1.5f);
-
-    // Live waveform placeholder — horizontal lines showing input vs output
-    const float mid = centerY;
-    g.setColour (P.purpleHi.withAlpha (0.65f));
-    const float inAmp  = juce::jmin (1.0f, inMeter * 2.0f);
-    const float outAmp = juce::jmin (1.0f, outMeter * 2.0f);
-    g.fillRect (juce::Rectangle<float> ((float) displayArea.getX() + 10,
-                                         mid - halfH * outAmp,
-                                         (float) displayArea.getWidth() - 20,
-                                         halfH * outAmp * 2.0f + 1.0f));
-    juce::ignoreUnused (inAmp);
-
-    // ----- Meter bar (output peak) at bottom of display area -----
-    auto meterBar = juce::Rectangle<int> (displayArea.getX() + 8,
-                                          displayArea.getBottom() - 26,
-                                          displayArea.getWidth() - 16, 18);
+    // ----- Meter bar (output peak) below the scope -----
+    auto meterBar = juce::Rectangle<int> (30, 244, getWidth() - 130, 18);
     g.setColour (P.bgDeep);
     g.fillRoundedRectangle (meterBar.toFloat(), 3.0f);
 
@@ -155,9 +108,6 @@ void TrapHouseEditor::paint (juce::Graphics& g)
     meter.addColour (0.7, juce::Colours::orange);
     g.setGradientFill (meter);
     g.fillRoundedRectangle (meterBar.withWidth (outW).toFloat(), 2.0f);
-
-    g.setColour (P.cream);
-    g.setFont (8.5f);
 
     // ----- Knob labels -----
     g.setColour (P.gold);
@@ -192,6 +142,9 @@ void TrapHouseEditor::resized()
     // Preset dropdown top-right
     presetBox.setBounds (getWidth() - 110, 22, 92, 26);
 
+    // Oscilloscope in the main display area (top-left, wide)
+    scope.setBounds (30, 90, getWidth() - 130, 150);
+
     // Right side panel: CHARACTER combo + AUTO GAIN + BYPASS
     characterBox.setBounds (getWidth() - 108, 116, 96, 26);
     autoGainBtn .setBounds (getWidth() - 110, 158, 104, 22);
@@ -217,6 +170,11 @@ void TrapHouseEditor::timerCallback()
 
     inMeter  = juce::jmax (inMeter  * 0.88f, inTarget);
     outMeter = juce::jmax (outMeter * 0.88f, outTarget);
+
+    // Feed the scope the current ceiling gain so the dashed lines track the knob.
+    const float ceilDb = processorRef.getAPVTS()
+        .getRawParameterValue (th::PID::ceiling)->load();
+    scope.setCeilingGain (juce::Decibels::decibelsToGain (ceilDb));
 
     repaint();
 }

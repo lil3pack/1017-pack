@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "dsp/Clipper.h"
+#include "dsp/ScopeBuffer.h"
 
 namespace th
 {
@@ -54,6 +55,9 @@ public:
     // For UI meters — atomic snapshot of recent input / output peak
     std::atomic<float> inputRms  { 0.0f };
     std::atomic<float> outputRms { 0.0f };
+
+    // Oscilloscope data (post-clipping)
+    th::dsp::ScopeBuffer scopeBuffer;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();

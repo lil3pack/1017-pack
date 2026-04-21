@@ -68,11 +68,17 @@ void TrapHouseProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     clipper.prepare (sampleRate, samplesPerBlock, getTotalNumOutputChannels());
     setLatencySamples (clipper.getLatencySamples());
+
+    // Decimate for the scope so we show ~80 ms in the visible frames.
+    const int target = juce::jmax (1, (int) std::round (sampleRate * 0.080 / th::dsp::ScopeBuffer::frameSize));
+    scopeBuffer.setDecimation (target);
+    scopeBuffer.reset();
 }
 
 void TrapHouseProcessor::releaseResources()
 {
     clipper.reset();
+    scopeBuffer.reset();
 }
 
 bool TrapHouseProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -127,7 +133,7 @@ void TrapHouseProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 
     clipper.process (buffer);
 
-    // Output RMS
+    // Output RMS + feed scope buffer (mono mixdown of output)
     float outSum = 0.0f;
     for (int ch = 0; ch < totalOut; ++ch)
     {
@@ -135,6 +141,14 @@ void TrapHouseProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         for (int i = 0; i < n; ++i) outSum += d[i] * d[i];
     }
     outputRms.store (std::sqrt (outSum / juce::jmax (1, n * totalOut)));
+
+    if (totalOut > 0)
+    {
+        const auto* l = buffer.getReadPointer (0);
+        const auto* r = (totalOut > 1) ? buffer.getReadPointer (1) : l;
+        for (int i = 0; i < n; ++i)
+            scopeBuffer.push ((l[i] + r[i]) * 0.5f);
+    }
 }
 
 juce::AudioProcessorEditor* TrapHouseProcessor::createEditor()

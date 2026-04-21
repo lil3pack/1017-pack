@@ -4,6 +4,7 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "PluginProcessor.h"
 #include "LookAndFeel1017.h"
+#include "ui/ScopeDisplay.h"
 
 class TrapHouseEditor : public juce::AudioProcessorEditor,
                         private juce::Timer
@@ -27,6 +28,9 @@ private:
     juce::ComboBox characterBox, presetBox;
     juce::ToggleButton autoGainBtn { "AUTO GAIN" };
     juce::ToggleButton bypassBtn   { "BYPASS" };
+
+    // Oscilloscope
+    th::ui::ScopeDisplay scope;
 
     // Meter state
     float inMeter  { 0.0f };
