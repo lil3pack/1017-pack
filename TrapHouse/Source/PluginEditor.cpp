@@ -9,10 +9,12 @@ void TrapHouseEditor::setupKnob (juce::Slider& k)
     k.setSliderStyle (juce::Slider::RotaryVerticalDrag);
     k.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f,
                            juce::MathConstants<float>::pi * 2.75f, true);
-    k.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 90, 22);
+    // Value is drawn INSIDE the disc by LookAndFeel1017::drawRotarySlider
+    k.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
     k.setVelocityBasedMode (true);
     k.setVelocityModeParameters (0.7, 1, 0.08, false);
     k.setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
+    k.setPopupDisplayEnabled (true, true, nullptr, 1000); // tooltip while dragging
     addAndMakeVisible (k);
 }
 

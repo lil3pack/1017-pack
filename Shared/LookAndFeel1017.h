@@ -103,6 +103,18 @@ public:
         indicator.addRoundedRectangle (-2.0f, -discRadius + 3.0f, 4.0f, discRadius * 0.55f, 2.0f);
         g.setColour (palette.purpleLean.darker (0.6f));
         g.fillPath (indicator, juce::AffineTransform::rotation (angle).translated (centre.x, centre.y));
+
+        // Value readout INSIDE the disc — dark text on gold (FabFilter style)
+        const juce::String text = slider.getTextFromValue (slider.getValue());
+        const float fontSize = juce::jmin (discRadius * 0.42f, 20.0f);
+        g.setFont (juce::Font (fontSize, juce::Font::bold));
+        g.setColour (palette.bgDeep.withAlpha (0.92f));
+        g.drawText (text,
+                    juce::Rectangle<float> (centre.x - discRadius,
+                                            centre.y - fontSize * 0.5f - 1.0f,
+                                            discRadius * 2.0f,
+                                            fontSize + 2.0f),
+                    juce::Justification::centred, false);
     }
 
     // ---- Slider text box (value readout under the knob) -------------------
