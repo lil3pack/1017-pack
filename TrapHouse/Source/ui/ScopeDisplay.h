@@ -96,7 +96,17 @@ namespace th::ui
             // Center axis
             g.setColour (palette.cream.withAlpha (0.1f));
             g.drawLine (bounds.getX() + 8.0f, midY, bounds.getRight() - 8.0f, midY, 0.8f);
+
+            // 🎮 CRT scanlines overlay — old arcade monitor feel
+            if (scanlinesEnabled)
+            {
+                g.setColour (juce::Colours::black.withAlpha (0.22f));
+                for (float sy = bounds.getY() + 2.0f; sy < bounds.getBottom() - 2.0f; sy += 3.0f)
+                    g.drawHorizontalLine ((int) sy, bounds.getX() + 2.0f, bounds.getRight() - 2.0f);
+            }
         }
+
+        void setScanlinesEnabled (bool on) noexcept { scanlinesEnabled = on; repaint(); }
 
     private:
         void timerCallback() override { repaint(); }
@@ -104,5 +114,6 @@ namespace th::ui
         const th::dsp::ScopeBuffer& buffer;
         const LookAndFeel1017::Palette& palette;
         float ceilingGain { 0.97f };
+        bool scanlinesEnabled { true }; // 🎮 CRT vibe, on by default
     };
 }

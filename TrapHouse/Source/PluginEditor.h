@@ -35,6 +35,9 @@ private:
     // Meters
     float outMeter { 0.0f };
 
+    // Animation phase (drives COMBO pulse + frame glow + anything tempo-synced)
+    float wavePhase { 0.0f };
+
     using APVTS = juce::AudioProcessorValueTreeState;
     std::unique_ptr<APVTS::SliderAttachment>   driveAtt, subGuardAtt;
     std::unique_ptr<APVTS::ComboBoxAttachment> characterAtt;

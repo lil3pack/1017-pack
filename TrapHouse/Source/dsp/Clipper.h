@@ -110,6 +110,67 @@ namespace th::dsp
     };
 
     //==========================================================================
+    // Transient detector — dual envelope follower (fast / slow).
+    // Returns a 0-1 amount: 0 = steady signal, 1 = strong attack transient.
+    // Used to reduce clipping aggression during drum hits so punch is preserved.
+    // (Inspired by Waves L3 / Kazrog KClip 3 / DMG Limitless transient modes.)
+    //==========================================================================
+    class TransientDetector
+    {
+    public:
+        void prepare (double sampleRate) noexcept
+        {
+            const auto a = [sampleRate] (float ms) {
+                return (float) std::exp (-1.0 / (sampleRate * ms * 1.0e-3));
+            };
+            aFastAtt = a (2.0f);    aFastRel = a (60.0f);
+            aSlowAtt = a (40.0f);   aSlowRel = a (400.0f);
+            reset();
+        }
+
+        void reset() noexcept { fast = 0.0f; slow = 0.0f; }
+
+        // Returns transient amount in [0, 1].
+        float process (float x) noexcept
+        {
+            const float ax = std::abs (x);
+            fast = ax > fast ? aFastAtt * fast + (1.0f - aFastAtt) * ax
+                             : aFastRel * fast + (1.0f - aFastRel) * ax;
+            slow = ax > slow ? aSlowAtt * slow + (1.0f - aSlowAtt) * ax
+                             : aSlowRel * slow + (1.0f - aSlowRel) * ax;
+            const float ratio = fast / std::max (slow, 1.0e-6f);
+            // ratio=1 → 0 (steady); ratio=3 → 1 (sharp transient)
+            return juce::jlimit (0.0f, 1.0f, (ratio - 1.0f) * 0.5f);
+        }
+
+    private:
+        float fast { 0.0f }, slow { 0.0f };
+        float aFastAtt { 0.9f }, aFastRel { 0.99f };
+        float aSlowAtt { 0.99f }, aSlowRel { 0.999f };
+    };
+
+    //==========================================================================
+    // One-pole low-pass (for TAPE character HF damping).
+    //==========================================================================
+    class OnePoleLP
+    {
+    public:
+        void setCutoff (float freqHz, double sampleRate) noexcept
+        {
+            a = (float) std::exp (-2.0 * juce::MathConstants<double>::pi
+                                  * (double) freqHz / sampleRate);
+        }
+        void reset() noexcept { state = 0.0f; }
+        float process (float x) noexcept
+        {
+            state = x * (1.0f - a) + state * a;
+            return state;
+        }
+    private:
+        float a { 0.0f }, state { 0.0f };
+    };
+
+    //==========================================================================
     // ClipperCore — the TRAP HOUSE DSP engine.
     //
     // Signal chain (per sample, inside 4x oversampled block):
@@ -181,6 +242,18 @@ namespace th::dsp
             // Scratch buffer for the low-band (allocated once, re-used)
             lowBandBuffer.setSize (nCh, maxBlockSize, false, false, true);
             lowBandBuffer.clear();
+
+            // DSP v3: Transient detectors (native rate) — one per channel
+            transients.resize ((size_t) nCh);
+            for (auto& t : transients) t.prepare (sampleRate);
+
+            // DSP v3: TAPE character HF damping — very subtle LP above 10 kHz
+            // gives the "bandwidth-limited tape" feel on TAPE mode only.
+            tapeHfDamp.resize ((size_t) nCh);
+            for (auto& f : tapeHfDamp) f.setCutoff (10000.0f, osRate);
+
+            // Cached per-sample transient amount, one slot per native sample
+            cachedTransient.fill (0.0f);
         }
 
         void reset()
@@ -190,6 +263,8 @@ namespace th::dsp
             for (auto& s : adaaState) s = {};
             for (auto& r : inRms)  r.reset();
             for (auto& r : outRms) r.reset();
+            for (auto& t : transients) t.reset();
+            for (auto& f : tapeHfDamp) f.reset();
             autoGainSmoother.setCurrentAndTargetValue (1.0f);
             subLowpass.reset();
             lowBandBuffer.clear();
@@ -223,6 +298,18 @@ namespace th::dsp
                     for (int i = 0; i < numSamples; ++i)
                         dryRmsSum += follower.process (d[i]);
                 }
+            }
+
+            // --- 1.25 Transient detection (native rate, pre-oversample) ---
+            // For each incoming native sample, compute a 0-1 "transient amount".
+            // We use channel 0 as the trigger signal (stereo trigger is approx
+            // the max of L,R; here we use L — cheap and good enough for trap).
+            const int transientCacheSize = juce::jmin (numSamples, (int) cachedTransient.size());
+            {
+                const auto* d = buffer.getReadPointer (0);
+                auto& det = transients[0];
+                for (int i = 0; i < transientCacheSize; ++i)
+                    cachedTransient[(size_t) i] = det.process (d[i]);
             }
 
             // --- 1.5 SUB GUARD split (at native rate, before oversampling) ---
@@ -308,25 +395,53 @@ namespace th::dsp
                         harmAmt = cachedHarm   [n];
                     }
 
-                    // Input gain
-                    float x = d[n] * inGain;
+                    // DSP v3: transient modulation (preserves punch on drum hits).
+                    // One native sample = 4 oversampled samples, so nativeIdx = n / 4.
+                    const int nativeIdx = juce::jmin (n >> 2, transientCacheSize - 1);
+                    const float trAmt = cachedTransient[(size_t) nativeIdx];
 
-                    // Character pre-shape
+                    // During a transient, clipping is softened:
+                    //   - Effective input gain reduced ~15% (so transient peak
+                    //     enters the clip less hard → preserves attack shape)
+                    //   - Knee softened → smoother limiting of the transient
+                    //   - Harmonics reduced ~50% → cleaner transient, less fizz
+                    // Decay is controlled by the slow env inside TransientDetector.
+                    const float effGain = inGain  * (1.0f - trAmt * 0.15f);
+                    const float effKnee = juce::jlimit (0.0f, 1.0f, knee + trAmt * 0.35f);
+                    const float effHarm = harmAmt * (1.0f - trAmt * 0.5f);
+
+                    // Input gain
+                    float x = d[n] * effGain;
+
+                    // DSP v3: character-specific pre-shape with distinct tonal signature.
                     switch (character)
                     {
                         case Character::Hard:
+                            // Pure ADAA clip downstream — keep transients bright.
                             break;
 
                         case Character::Tape:
-                            // asinh is smoother than tanh — compression-like
-                            x = std::asinh (x * 0.9f) / std::asinh (0.9f);
+                            // asinh for musical compression-like saturation
+                            // (smoother than tanh, more transparent at low levels).
+                            x = std::asinh (x * 0.8f) / std::asinh (0.8f);
+                            // Subtle HF damping at 10 kHz (per-channel, oversampled rate).
+                            // Recreates the bandwidth-limited feel of magnetic tape.
+                            x = tapeHfDamp[(size_t) juce::jmin (ch, (int) tapeHfDamp.size() - 1)]
+                                    .process (x);
                             break;
 
                         case Character::Tube:
-                            // Asymmetric soft saturation: positive lobe pushed, negative less.
-                            // Generates even harmonics ahead of the clip.
-                            x = std::tanh (x * 1.05f)
-                                + 0.08f * (x * x * (x > 0.0f ? 1.0f : -1.0f));
+                            // Asymmetric diode clipper (1N914-inspired model):
+                            // positive lobe saturates ~45% faster than negative.
+                            // This generates strong even harmonics ahead of the main clip.
+                            {
+                                const float slopePos = 1.3f;
+                                const float slopeNeg = 0.9f;
+                                x = (x > 0.0f) ? std::tanh (x * slopePos) / std::tanh (slopePos)
+                                               : std::tanh (x * slopeNeg) / std::tanh (slopeNeg);
+                                // Extra static compression-like bulge for "tubey" thickness.
+                                x *= 0.94f;
+                            }
                             break;
                     }
 
@@ -336,7 +451,7 @@ namespace th::dsp
                     // ADAA: share xPrev, separate FPrev per curve.
                     const float dx     = xn - st.xPrev;
                     const float FhardN = shape::F_hardClip (xn);
-                    const float softG  = 0.5f + (1.0f - knee) * 5.0f; // knee=0 → 5.5 (near hard), knee=1 → 0.5 (very soft)
+                    const float softG  = 0.5f + (1.0f - effKnee) * 5.0f; // effKnee uses transient modulation
                     const float FsoftN = shape::F_softClip  (xn, softG);
 
                     float hard, soft;
@@ -357,17 +472,17 @@ namespace th::dsp
                     st.FsoftPrev = FsoftN;
 
                     // Blend: both curves clip at ±1 so no level mismatch.
-                    float yn = (1.0f - knee) * hard + knee * soft;
+                    float yn = (1.0f - effKnee) * hard + effKnee * soft;
 
-                    // Parallel harmonic injection
-                    if (harmAmt > 0.0f)
+                    // Parallel harmonic injection (DSP v3: more distinct bias per character)
+                    if (effHarm > 0.0f)
                     {
                         float biasEven;
                         switch (character)
                         {
-                            case Character::Hard: biasEven = 0.30f; break;
-                            case Character::Tape: biasEven = 0.60f; break;
-                            case Character::Tube: biasEven = 0.80f; break;
+                            case Character::Hard: biasEven = 0.20f; break; // 20% 2nd / 80% 3rd — bright, edgy
+                            case Character::Tape: biasEven = 0.65f; break; // 65% 2nd / 35% 3rd — warm, smooth
+                            case Character::Tube: biasEven = 0.85f; break; // 85% 2nd / 15% 3rd — thick, tubey
                             default:              biasEven = 0.50f; break;
                         }
 
@@ -377,7 +492,7 @@ namespace th::dsp
                         const float h3 = 4.0f * yn * yn * yn - 3.0f * yn;
 
                         const float h = biasEven * h2 + (1.0f - biasEven) * h3;
-                        yn += harmAmt * 0.30f * h;
+                        yn += effHarm * 0.30f * h;
                     }
 
                     // Soft safety clamp in normalised domain (cheap overshoot control)
@@ -487,5 +602,10 @@ namespace th::dsp
         std::array<float, 8192> cachedCeiling {};
         std::array<float, 8192> cachedKnee    {};
         std::array<float, 8192> cachedHarm    {};
+
+        // DSP v3 additions
+        std::vector<TransientDetector> transients;      // per-channel (native rate)
+        std::vector<OnePoleLP>         tapeHfDamp;      // per-channel (oversampled rate, TAPE only)
+        std::array<float, 2048>        cachedTransient {}; // per-native-sample transient amount
     };
 }

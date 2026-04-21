@@ -10,15 +10,19 @@
 class LookAndFeel1017 : public juce::LookAndFeel_V4
 {
 public:
+    // 3PACK CLIP · FIRE edition palette
+    // Red body + yellow/gold accents + cream highlights.
+    // (Keeps the member names 'purpleLean' / 'purpleHi' for backward compat —
+    //  they now carry the red primary tones.)
     struct Palette
     {
-        juce::Colour bgDeep     { 0xFF1A0F2B };
-        juce::Colour bgMid      { 0xFF2B1A3D };
-        juce::Colour purpleLean { 0xFF6B3FA0 };
-        juce::Colour purpleHi   { 0xFF9B6FD9 };
-        juce::Colour gold       { 0xFFD4AF37 };
-        juce::Colour goldHi     { 0xFFF4D03F };
-        juce::Colour cream      { 0xFFF5E9D1 };
+        juce::Colour bgDeep     { 0xFF140403 };  // near-black with red tint
+        juce::Colour bgMid      { 0xFF2E0A07 };  // dark crimson
+        juce::Colour purpleLean { 0xFFB71C1C };  // firetruck red (primary)
+        juce::Colour purpleHi   { 0xFFFF5252 };  // coral red highlight
+        juce::Colour gold       { 0xFFFFC107 };  // amber
+        juce::Colour goldHi     { 0xFFFFEE58 };  // bright yellow
+        juce::Colour cream      { 0xFFFFF8DC };  // warm cream
         juce::Colour danger     { 0xFFE74C3C };
     };
 
