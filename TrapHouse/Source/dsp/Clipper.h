@@ -225,8 +225,10 @@ namespace th::dsp
             gainReduction = 1.0f;
 
             const float sr = (float) sampleRate;
-            attCoeff = std::exp (-1.0f / (sr * 0.0005f)); // 0.5 ms attack
-            relCoeff = std::exp (-1.0f / (sr * 0.050f));  // 50  ms release
+            // v4.1: slower attack (2 ms vs 0.5 ms) — avoids "clicks" on small
+            // transient overshoots that were a source of audible crackle.
+            attCoeff = std::exp (-1.0f / (sr * 0.002f));  // 2 ms attack
+            relCoeff = std::exp (-1.0f / (sr * 0.080f));  // 80 ms release (slightly longer, smoother)
         }
 
         int getLatencySamples() const noexcept { return lookAhead; }
@@ -448,7 +450,9 @@ namespace th::dsp
         void setShelfAmount (float norm01)
         {
             const float v = juce::jlimit (0.0f, 1.0f, norm01);
-            if (std::abs (v - shelfAmount01) < 1.0e-4f) return;
+            // v4.1: only re-compute coefficients on significant change (>0.5%)
+            // avoids per-block IIR state glitches when DRIVE is automated.
+            if (std::abs (v - shelfAmount01) < 5.0e-3f) return;
             shelfAmount01 = v;
             lowShelf .setParameters (120.0f,  v * 4.0f);
             highShelf.setParameters (6500.0f, v * 2.5f);
@@ -658,25 +662,42 @@ namespace th::dsp
                     // Blend: both curves clip at ±1 so no level mismatch.
                     float yn = (1.0f - effKnee) * hard + effKnee * soft;
 
-                    // Parallel harmonic injection (DSP v3: more distinct bias per character)
+                    // v4.1: SMOOTH harmonic injection (no 2nd-derivative kink → no crackle).
+                    //
+                    // PREVIOUS BUG: h2 = 2*yn²*sign(yn) has a 2nd-derivative
+                    // discontinuity at yn=0 (jumps by ±8 on each zero-crossing).
+                    // That produces constant aliasing audible as "crackle"
+                    // at low-to-mid DRIVE (masked by saturation at high DRIVE).
+                    //
+                    // FIX: the 2nd harmonic now comes from a smooth
+                    // "tanh with DC offset, minus DC" formula — the exact
+                    // technique real tube models (UAD, Waves, FabFilter) use.
+                    // This function has continuous derivatives of ALL orders.
                     if (effHarm > 0.0f)
                     {
                         float biasEven;
+                        float biasOffset;
                         switch (character)
                         {
-                            case Character::Hard: biasEven = 0.20f; break; // 20% 2nd / 80% 3rd — bright, edgy
-                            case Character::Tape: biasEven = 0.65f; break; // 65% 2nd / 35% 3rd — warm, smooth
-                            case Character::Tube: biasEven = 0.85f; break; // 85% 2nd / 15% 3rd — thick, tubey
-                            default:              biasEven = 0.50f; break;
+                            case Character::Hard: biasEven = 0.20f; biasOffset = 0.05f; break;
+                            case Character::Tape: biasEven = 0.65f; biasOffset = 0.10f; break;
+                            case Character::Tube: biasEven = 0.85f; biasOffset = 0.15f; break;
+                            default:              biasEven = 0.50f; biasOffset = 0.10f; break;
                         }
 
-                        // 2nd harmonic (sign-preserved, centred at 0)
-                        const float h2 = (2.0f * yn * yn) * (yn >= 0.0f ? 1.0f : -1.0f);
-                        // 3rd harmonic (Chebyshev T3)
+                        // Smooth 2nd-harmonic generator (tanh with DC offset trick):
+                        //   h2s = (tanh(yn + b) - tanh(b)) - tanh(yn)
+                        //   => asymmetric saturation component, DC-removed, smooth
+                        const float tanhBiased = std::tanh (yn + biasOffset);
+                        const float tanhBase   = std::tanh (yn);
+                        const float tanhB0     = std::tanh (biasOffset);
+                        const float h2_smooth  = (tanhBiased - tanhB0) - tanhBase;
+
+                        // 3rd harmonic (Chebyshev T3) — polynomial, already smooth
                         const float h3 = 4.0f * yn * yn * yn - 3.0f * yn;
 
-                        const float h = biasEven * h2 + (1.0f - biasEven) * h3;
-                        yn += effHarm * 0.30f * h;
+                        const float h = biasEven * h2_smooth + (1.0f - biasEven) * h3;
+                        yn += effHarm * 0.40f * h;
                     }
 
                     // Soft safety clamp in normalised domain (cheap overshoot control)
