@@ -410,7 +410,8 @@ namespace th::dsp
             cachedSampleRate = sampleRate;
             lowShelf .prepare (sampleRate, nCh, maxBlockSize, ShelvingFilter::Type::LowShelf);
             highShelf.prepare (sampleRate, nCh, maxBlockSize, ShelvingFilter::Type::HighShelf);
-            shelfAmount01 = 0.0f;
+            lowShelfAmount01  = 0.0f;
+            highShelfAmount01 = 0.0f;
             lowShelf .setParameters (120.0f, 0.0f);
             highShelf.setParameters (6500.0f, 0.0f);
 
@@ -452,14 +453,31 @@ namespace th::dsp
         // v4: Sausage Fattener-style shelving EQ amount (0..1, driven by DRIVE)
         // Pre: low-shelf boost @ 120 Hz up to +4 dB (thump / weight)
         // Post: high-shelf boost @ 6.5 kHz up to +2.5 dB (air / presence)
+        //
+        // v5.1 MASTER-READY: low and high shelves can now be set independently
+        // so the processor can taper the HIGH shelf past drive=0.7 (prevents
+        // HF harshness when the clipper is already generating upper harmonics)
+        // while keeping the LOW shelf rising for warmth.
         void setShelfAmount (float norm01)
         {
+            // Back-compat API: both shelves move together.
+            setLowShelfAmount  (norm01);
+            setHighShelfAmount (norm01);
+        }
+
+        void setLowShelfAmount (float norm01)
+        {
             const float v = juce::jlimit (0.0f, 1.0f, norm01);
-            // v4.1: only re-compute coefficients on significant change (>0.5%)
-            // avoids per-block IIR state glitches when DRIVE is automated.
-            if (std::abs (v - shelfAmount01) < 5.0e-3f) return;
-            shelfAmount01 = v;
-            lowShelf .setParameters (120.0f,  v * 4.0f);
+            if (std::abs (v - lowShelfAmount01) < 5.0e-3f) return;
+            lowShelfAmount01 = v;
+            lowShelf.setParameters (120.0f, v * 4.0f);
+        }
+
+        void setHighShelfAmount (float norm01)
+        {
+            const float v = juce::jlimit (0.0f, 1.0f, norm01);
+            if (std::abs (v - highShelfAmount01) < 5.0e-3f) return;
+            highShelfAmount01 = v;
             highShelf.setParameters (6500.0f, v * 2.5f);
         }
 
@@ -487,7 +505,7 @@ namespace th::dsp
             // clipping, so the boosted lows feed into the saturator
             // and generate fat harmonics. This is the #1 thing that makes
             // maximizers sound "fat" instead of "distorted".
-            if (shelfAmount01 > 1.0e-4f)
+            if (lowShelfAmount01 > 1.0e-4f)
                 lowShelf.process (buffer);
 
             // --- 1.25 Transient detection (native rate, pre-oversample) ---
@@ -767,7 +785,7 @@ namespace th::dsp
             // After clipping/harmonic injection: adds a gentle "sparkle" to
             // the top end. Combined with the pre low-shelf boost, this gives
             // the Sausage Fattener-style smile curve that makes beats pop.
-            if (shelfAmount01 > 1.0e-4f)
+            if (highShelfAmount01 > 1.0e-4f)
                 highShelf.process (buffer);
 
             // --- 5. Auto-gain RMS makeup ---
@@ -871,7 +889,8 @@ namespace th::dsp
         // DSP v4: Sausage-Fattener-style shelving EQ (pre-low, post-high)
         ShelvingFilter lowShelf;
         ShelvingFilter highShelf;
-        float shelfAmount01 { 0.0f };
+        float lowShelfAmount01  { 0.0f };
+        float highShelfAmount01 { 0.0f };
         double cachedSampleRate { 48000.0 };
     };
 }

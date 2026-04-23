@@ -122,25 +122,37 @@ void TrapHouseProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     //   pre low-shelf, input gain, cascade saturation, hard clip, harmonic
     //   enhance, post high-shelf, auto makeup, TP limiter.
     //
-    //   drive=0    → 0 dB   / knee 0.00 / harm 0.00 / shelf 0     — TRUE BYPASS (passthrough)
-    //   drive=0.2  → +3 dB  / knee 0.12 / harm 0.14 / shelf 0.20  — warmth, still transparent
-    //   drive=0.3  → +5 dB  / knee 0.18 / harm 0.21 / shelf 0.30  — glue
-    //   drive=0.5  → +9 dB  / knee 0.30 / harm 0.35 / shelf 0.50  — fat (peak soft blend)
-    //   drive=0.7  → +13 dB / knee 0.42 / harm 0.49 / shelf 0.70  — loud
-    //   drive=1.0  → +18 dB / knee 0.60 / harm 0.70 / shelf 1.0   — destructive
+    //   v5.1 MASTER-READY mapping. Below 0.7 the plugin adds harmonics for
+    //   character; ABOVE 0.7 the plugin prioritises peak control, tapering
+    //   extra harmonics + high-shelf air so pushed-to-max stays musical on a
+    //   stereo bus instead of getting fizzy/harsh.
     //
-    //   CRITICAL v4.2 FIX: knee mapping INVERTED.
-    //   Before: high knee at low drive = soft clip always active = compression
-    //   even at drive=0 (inaudible but a subtle source of "everything sounds
-    //   quieter/duller"). Now: drive=0 → pure hard clip which is passthrough
-    //   for signals below ceiling → true transparent bypass.
+    //   drive=0    → 0 dB   / knee 0.00 / harm 0.00 / loS 0.00 / hiS 0.00  — passthrough
+    //   drive=0.2  → +2 dB  / knee 0.24 / harm 0.14 / loS 0.20 / hiS 0.20  — warmth
+    //   drive=0.3  → +4 dB  / knee 0.32 / harm 0.21 / loS 0.30 / hiS 0.30  — glue
+    //   drive=0.5  → +7 dB  / knee 0.48 / harm 0.33 / loS 0.50 / hiS 0.50  — fat
+    //   drive=0.7  → +10 dB / knee 0.63 / harm 0.42 / loS 0.70 / hiS 0.70  — loud
+    //   drive=0.85 → +12 dB / knee 0.72 / harm 0.29 / loS 0.85 / hiS 0.40  — hot but controlled
+    //   drive=1.0  → +15 dB / knee 0.80 / harm 0.15 / loS 1.00 / hiS 0.10  — master-safe max
     //
     //   Ceiling stays at -1.0 dBFS; post TP limiter guarantees -1 dBTP safe.
-    const float inGainDb = drive * 18.0f;
-    const float ceilDb   = -1.0f;
-    const float knee     = drive * 0.60f;         // v4.2: 0 at drive=0, 0.6 at drive=1
-    const float harm     = drive * 0.70f;
-    const float shelf    = drive;
+    const float driveCurve = std::pow (drive, 1.25f);            // mild ease-in
+    const float inGainDb   = driveCurve * 15.0f;                  // was drive*18 (too brutal at max)
+    const float ceilDb     = -1.0f;
+    // Knee ramps faster → more soft-clip blend at high drive (smoother peaks):
+    const float knee       = std::pow (drive, 0.75f) * 0.80f;
+    // Harmonic injection peaks at drive≈0.6 then TAPERS — stops stacking
+    // extra crunch on top of what the clipper naturally generates:
+    const float harm       = (drive <= 0.6f)
+        ? drive * 0.70f
+        : juce::jmax (0.0f, 0.42f - (drive - 0.6f) * 0.675f);     // 0.42 @0.6 → 0.15 @1.0 → 0 past
+    // LOW shelf keeps rising (warmth counteracts thinness from heavy clipping):
+    const float shelfLow   = drive;
+    // HIGH shelf tapers hard past 0.7 — when the clip is already making upper
+    // harmonics, boosting 6.5 kHz on top = harshness. We back off instead:
+    const float shelfHigh  = (drive <= 0.7f)
+        ? drive
+        : juce::jmax (0.0f, 0.7f - (drive - 0.7f) * 2.0f);        // 0.7 @0.7 → 0.1 @1.0
 
     const float subGuard = juce::jlimit (0.0f, 1.0f,
         apvts.getRawParameterValue (th::PID::subGuard)->load());
@@ -154,11 +166,12 @@ void TrapHouseProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     if (charIdx == 3 && ! isIceUnlocked())
         charIdx = 0;
 
-    clipper.setInputGainDb (inGainDb);
-    clipper.setCeilingDb   (ceilDb);
-    clipper.setKnee        (knee);
-    clipper.setHarmonics   (harm);
-    clipper.setShelfAmount (shelf);
+    clipper.setInputGainDb      (inGainDb);
+    clipper.setCeilingDb        (ceilDb);
+    clipper.setKnee             (knee);
+    clipper.setHarmonics        (harm);
+    clipper.setLowShelfAmount   (shelfLow);
+    clipper.setHighShelfAmount  (shelfHigh);
     clipper.setSubGuard    (subGuard);
     clipper.setCharacter   (static_cast<th::dsp::ClipperCore::Character> (juce::jlimit (0, 3, charIdx)));
     clipper.setAutoGain    (autoG);

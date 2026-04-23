@@ -72,15 +72,26 @@ public:
     juce::ValueTree tycoonState { "TycoonState" };
 
     // 🎮 Game-unlocked plugin features (read by processBlock + editor)
+    // ATL EMPIRE v2 building indices:
+    //   0=TRAP  1=STUDIO  2=RADIO  3=LABEL_HQ  4=AIRPORT  5=MANSION
     bool isIceUnlocked() const noexcept
     {
         if (! tycoonState.isValid()) return false;
-        return (int) tycoonState.getProperty ("count_2", 0) > 0; // LABEL count
+        return (int) tycoonState.getProperty ("count_3", 0) > 0; // LABEL HQ
     }
     bool isPrestigeActive() const noexcept
     {
         if (! tycoonState.isValid()) return false;
         return (int) tycoonState.getProperty ("prestige", 0) > 0;
+    }
+    // New: signed artists unlocks advanced auto-gain behaviour
+    int getSignedArtistCount() const noexcept
+    {
+        if (! tycoonState.isValid()) return 0;
+        const int mask = (int) tycoonState.getProperty ("signedArtistMask", 0);
+        int n = 0;
+        for (int i = 0; i < 8; ++i) if (mask & (1 << i)) ++n;
+        return n;
     }
 
 private:
