@@ -10,19 +10,19 @@
 class LookAndFeel1017 : public juce::LookAndFeel_V4
 {
 public:
-    // 3PACK CLIP · FIRE edition palette
-    // Red body + yellow/gold accents + cream highlights.
-    // (Keeps the member names 'purpleLean' / 'purpleHi' for backward compat —
-    //  they now carry the red primary tones.)
+    // 3PACK CLIP · VOLT edition palette (default)
+    // Acid green + lime + electric yellow — trap meme aesthetic.
+    // (Keeps the member names 'purpleLean' / 'purpleHi' / 'gold' / 'goldHi' for
+    //  backward compat — they now carry the VOLT palette tones.)
     struct Palette
     {
-        juce::Colour bgDeep     { 0xFF140403 };  // near-black with red tint
-        juce::Colour bgMid      { 0xFF2E0A07 };  // dark crimson
-        juce::Colour purpleLean { 0xFFB71C1C };  // firetruck red (primary)
-        juce::Colour purpleHi   { 0xFFFF5252 };  // coral red highlight
-        juce::Colour gold       { 0xFFFFC107 };  // amber
-        juce::Colour goldHi     { 0xFFFFEE58 };  // bright yellow
-        juce::Colour cream      { 0xFFFFF8DC };  // warm cream
+        juce::Colour bgDeep     { 0xFF0A1000 };  // near-black with green tint
+        juce::Colour bgMid      { 0xFF1A2500 };  // dark forest
+        juce::Colour purpleLean { 0xFF9CCC65 };  // acid green (primary)
+        juce::Colour purpleHi   { 0xFFC6FF00 };  // bright electric green highlight
+        juce::Colour gold       { 0xFFFFEB3B };  // acid yellow
+        juce::Colour goldHi     { 0xFFCDDC39 };  // lime yellow
+        juce::Colour cream      { 0xFFF1F8E9 };  // light pale green-cream
         juce::Colour danger     { 0xFFE74C3C };
     };
 
