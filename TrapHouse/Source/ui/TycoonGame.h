@@ -1278,7 +1278,7 @@ namespace th::game
             g.fillRect (winR);
             // Door
             g.setColour (juce::Colour (0xFF0A1000));
-            g.fillRect (rp.getX() + 3, rp.getBottom() - 10, 5, 10);
+            g.fillRect (rp.getX() + 3.0f, rp.getBottom() - 10.0f, 5.0f, 10.0f);
             // "TAP" hint
             g.setColour (juce::Colour (0xFFC6FF00));
             g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 7.0f, juce::Font::bold));
@@ -1311,9 +1311,9 @@ namespace th::game
             }
             // Mic sign on top
             g.setColour (juce::Colour (0xFFFFEB3B));
-            g.fillEllipse (rf.getCentreX() - 2, rf.getY() - 3, 4, 4);
+            g.fillEllipse (rf.getCentreX() - 2.0f, rf.getY() - 3.0f, 4.0f, 4.0f);
             g.setColour (juce::Colour (0xFF0A1000));
-            g.fillRect (rf.getCentreX() - 1, rf.getY() - 4, 2, 2);
+            g.fillRect (rf.getCentreX() - 1.0f, rf.getY() - 4.0f, 2.0f, 2.0f);
         }
 
         void drawRadio (juce::Graphics& g, juce::Rectangle<int> r, int lv, bool isNight)
@@ -1326,7 +1326,7 @@ namespace th::game
             const float spin = getDayNightPhase() * juce::MathConstants<float>::twoPi * 4.0f;
             const auto dishC = juce::Point<float> (rf.getCentreX(), rf.getY() + 4);
             g.setColour (juce::Colour (0xFF90A4AE));
-            g.fillEllipse (dishC.x - 6, dishC.y - 3, 12, 6);
+            g.fillEllipse (dishC.x - 6.0f, dishC.y - 3.0f, 12.0f, 6.0f);
             // Antenna
             g.setColour (juce::Colour (0xFFB0BEC5));
             g.fillRect (dishC.x - 0.5f, rf.getY() - 3, 1.0f, 5.0f);
@@ -1452,7 +1452,7 @@ namespace th::game
             g.fillRect (rf.getCentreX() - 3, rf.getY() + rf.getHeight() * 0.65f, 6.0f, rf.getHeight() * 0.3f);
             // Gold dome on top
             g.setColour (juce::Colour (0xFFFFD700));
-            g.fillEllipse (rf.getCentreX() - 3, rf.getY() - 4, 6, 5);
+            g.fillEllipse (rf.getCentreX() - 3.0f, rf.getY() - 4.0f, 6.0f, 5.0f);
             // Prestige star count
             for (int i = 0; i < juce::jmin (state.prestige, 5); ++i)
             {
@@ -1553,7 +1553,7 @@ namespace th::game
                 }
                 // Click hint glow
                 g.setColour (juce::Colour (0xFFC6FF00).withAlpha (0.25f));
-                g.drawEllipse (r.x - 6, r.y + bob - 6, 14, 14, 1.0f);
+                g.drawEllipse (r.x - 6.0f, r.y + bob - 6.0f, 14.0f, 14.0f, 1.0f);
             }
         }
 
