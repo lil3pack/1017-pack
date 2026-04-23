@@ -1030,6 +1030,13 @@ void TrapHouseEditor::mouseDown (const juce::MouseEvent& e)
             secretPanelVisible = ! secretPanelVisible;
             logoClickCount = 0;
             mixKnob.setVisible (secretPanelVisible);
+            // v5.2 fix: hide scope + tycoon when the MASTER LAB overlay is
+            // open so they don't paint on top of the panel (children always
+            // render after parent.paint() in JUCE — there's no clean way to
+            // draw an "overlay" ABOVE children short of setVisible(false)).
+            scope  .setVisible (! secretPanelVisible);
+            tycoon .setVisible (! secretPanelVisible);
+            driveKnob.setVisible (! secretPanelVisible);
         }
     }
 
