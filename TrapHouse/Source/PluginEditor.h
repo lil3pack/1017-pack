@@ -39,6 +39,8 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override; // v4.4 — secret panel trigger
+    void mouseDrag (const juce::MouseEvent&) override; // v5.2 — reposition tycoon
+    void mouseUp   (const juce::MouseEvent&) override;
 
 private:
     void timerCallback() override;
@@ -61,7 +63,9 @@ private:
     int   tycoonW { 470 };
     int   tycoonH { 200 };
 
-    // Drag state
+    // v5.2: drag state — Tycoon window is now repositionable by grabbing its
+    // top-right handle. The tycoon component fires drag callbacks that the
+    // editor wires in the constructor to update tycoonX/Y + resized().
     enum class DragTarget { None, Knob, Tycoon };
     DragTarget dragTarget { DragTarget::None };
     juce::Point<float> dragOffset;
@@ -107,14 +111,24 @@ private:
     int64_t lastLogoClickMs    { 0 };
     float   secretPanelAlpha   { 0.0f }; // animates open/close
 
-    // Secret panel controls (only shown when secretPanelVisible)
-    juce::Slider stereoWidthKnob;
-    juce::Slider outputTrimKnob;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> stereoWidthAtt;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputTrimAtt;
+    // v5.2 SECRET PANEL — refactored:
+    //   - MIX knob (dry/wet parallel blend)
+    //   - live TRANSFER CURVE display (input -> output clipping function)
+    //   - LUFS readout (short-term loudness)
+    // The old stereoWidth / outputTrim knobs were removed (buggy/unmusical);
+    // the corresponding APVTS params remain for backward-compatible save/load.
+    juce::Slider mixKnob;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mixAtt;
+    juce::Rectangle<int> transferCurveBounds;   // where to draw the live curve
 
     void updateAnimation();                    // advance state (called from timer)
     void spawnSparks (float kcxA, float kcxB, float kcy);
+
+    // v5.2 — live clipper transfer curve in the MASTER LAB secret panel.
+    void drawTransferCurve (juce::Graphics& g,
+                             juce::Rectangle<int> bounds,
+                             const LookAndFeel1017::Palette& P,
+                             float alpha);
 
     // v5 MASTER CLASS animation state
     struct OrbitParticle { float angle; float speed; float elliptical; float offset; };

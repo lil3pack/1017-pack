@@ -80,17 +80,21 @@ namespace th::game
 
     static constexpr int NUM_BUILDINGS = 6;
 
-    // Layout designed for a 470×~130 map area (top HUD takes 30, bottom HUD 40)
+    // v5.2 MONTPELLIER CITY — landmarks replace the generic ATL buildings.
+    // Progression slowed vs v2: base costs ×2.5, income curves ×0.7, so
+    // the user spends more time on each tier and the late-game Mansion
+    // feels earned (≈an hour instead of ≈15 min of idle play).
+    // Layout designed for a 470×~130 map area (top HUD takes 30, tab bar 12).
     static const std::array<BuildingDef, NUM_BUILDINGS>& getBuildings()
     {
         static const std::array<BuildingDef, NUM_BUILDINGS> B = {{
-            // name              short    x    y    w   h   baseCost   mult    inc     unlock
-            { "TRAP HOUSE",      "TRAP",  30,   82, 38, 30, 10.0,       1.10,    1.0,   0.0      },
-            { "HOME STUDIO",     "STUD",  90,   76, 40, 36, 100.0,      1.13,    8.0,   500.0    },
-            { "RADIO STATION",   "RADIO", 150,  70, 42, 42, 1000.0,     1.16,    55.0,  5000.0   },
-            { "LABEL HQ",        "LABEL", 215,  58, 50, 54, 10000.0,    1.19,    420.0, 50000.0  },
-            { "ATL AIRPORT",     "AIR",   290,  76, 60, 36, 100000.0,   1.22,    3200.0, 500000.0},
-            { "ATL MANSION",     "MANSN", 380,  68, 70, 46, 1000000.0,  1.25,    22000.0, 5000000.0},
+            // name              short    x    y    w   h   baseCost   mult    inc       unlock
+            { "ECUSSON",         "ECUS",  30,   82, 38, 30,      25.0,  1.10,      0.7,        0.0 },
+            { "HOME ARCEAUX",    "ARCX",  90,   76, 40, 36,     250.0,  1.13,      5.6,     1250.0 },
+            { "RADIO ANTIGONE",  "ANTI",  150,  70, 42, 42,    2500.0,  1.16,     38.0,    12500.0 },
+            { "LABEL COMEDIE",   "COMD",  215,  58, 50, 54,   25000.0,  1.19,    290.0,   125000.0 },
+            { "GARE ST-ROCH",    "GARE",  290,  76, 60, 36,  250000.0,  1.22,   2240.0,  1250000.0 },
+            { "CHATEAU D'O",     "CHAT",  380,  68, 70, 46, 2500000.0,  1.25,  15400.0, 12500000.0 },
         }};
         return B;
     }
@@ -109,17 +113,18 @@ namespace th::game
 
     static constexpr int NUM_ARTISTS = 8;
 
+    // v5.2 MONTPELLIER roster — French names, fees ×2.5 (longer grind).
     static const std::array<ArtistDef, NUM_ARTISTS>& getArtists()
     {
         static const std::array<ArtistDef, NUM_ARTISTS> A = {{
-            { "LIL VELOUR",    "VLV",  5000.0,    0.04,   50000.0   },
-            { "YUNG CHEF",     "YCH",  25000.0,   0.06,   200000.0  },
-            { "KING ATL",      "KAT",  80000.0,   0.08,   600000.0  },
-            { "TRAP DOCC",     "TDC",  250000.0,  0.10,   1500000.0 },
-            { "404 BOI",       "404",  800000.0,  0.12,   4000000.0 },
-            { "MIDTOWN MAFIA", "MTM",  2500000.0, 0.15,   10000000.0},
-            { "GLOCK GHOST",   "GLK",  8000000.0, 0.18,   30000000.0},
-            { "DIAMOND DRE",   "DIA",  25000000.0,0.22,   100000000.0},
+            { "GRAND VELOURS",   "GVL",     12500.0, 0.04,     125000.0 },
+            { "LE CHEF",         "CHF",     62500.0, 0.06,     500000.0 },
+            { "ROI MTP",         "ROI",    200000.0, 0.08,    1500000.0 },
+            { "DOC TRAP",        "DOC",    625000.0, 0.10,    3750000.0 },
+            { "34000 BOY",       "340",   2000000.0, 0.12,   10000000.0 },
+            { "PAILLADE MAFIA",  "PAI",   6250000.0, 0.15,   25000000.0 },
+            { "FANTOME",         "FTM",  20000000.0, 0.18,   75000000.0 },
+            { "DIAM DIMITRI",    "DIM",  62500000.0, 0.22,  250000000.0 },
         }};
         return A;
     }
@@ -426,6 +431,15 @@ namespace th::game
         {
             const auto p = e.getPosition();
 
+            // v5.2: drag handle — grab the top-right ⋮⋮ to reposition the
+            // tycoon window. The editor's callback takes over from here.
+            if (getDragHandleRect().contains (p))
+            {
+                draggingHandle = true;
+                if (onDragHandleDown) onDragHandleDown (e);
+                return;
+            }
+
             // Tabs (always on top)
             for (int i = 0; i < 3; ++i)
                 if (tabRects[(size_t) i].contains (p))
@@ -451,11 +465,38 @@ namespace th::game
             else if (state.activeTab == 2)   handleLegendTabClick (p);
         }
 
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            if (draggingHandle && onDragHandleDrag) onDragHandleDrag (e);
+        }
+
+        void mouseUp (const juce::MouseEvent& e) override
+        {
+            if (draggingHandle)
+            {
+                if (onDragHandleUp) onDragHandleUp (e);
+                draggingHandle = false;
+            }
+        }
+
         //----- audio coupling -----
         void setAudioActivity (float rms01) noexcept
         {
             audioActivity = 0.92f * audioActivity + 0.08f * juce::jlimit (0.0f, 1.0f, rms01);
         }
+
+        // v5.2: drag handle — editor installs a callback that fires when the
+        // user grabs the top-right 14×14 handle so the plugin window can
+        // reposition the tycoon. Returns the hit rect so the editor can
+        // cross-check (avoids double event processing).
+        juce::Rectangle<int> getDragHandleRect() const noexcept
+        {
+            // Top-right corner of the local bounds, 14×14 with 2px inset.
+            return { getWidth() - 16, 2, 14, 14 };
+        }
+        std::function<void (const juce::MouseEvent&)> onDragHandleDown;
+        std::function<void (const juce::MouseEvent&)> onDragHandleDrag;
+        std::function<void (const juce::MouseEvent&)> onDragHandleUp;
 
         //----- save/load -----
         juce::ValueTree getSaveState() const
@@ -508,6 +549,7 @@ namespace th::game
         int64_t cycleStartMs { 0 };
         int     framesSinceRunner { 0 };
         int     framesSinceMission { 0 };
+        bool    draggingHandle { false };
 
         // Achievement toast (shows when a new one unlocks)
         int         toastTimer { 0 };
@@ -1139,6 +1181,25 @@ namespace th::game
                 g.drawText ("x" + juce::String (state.eventMultiplier, 1),
                             hr, juce::Justification::centredRight);
             }
+
+            // v5.2: drag handle — top-right 14×14 square. Drawn as 6 small
+            // dots in a 2×3 pattern (looks like a grip/drag handle).
+            drawDragHandle (g, getDragHandleRect());
+        }
+
+        void drawDragHandle (juce::Graphics& g, juce::Rectangle<int> r)
+        {
+            g.setColour (juce::Colour (0xFF0A1000).withAlpha (0.6f));
+            g.fillRoundedRectangle (r.toFloat(), 2.0f);
+            g.setColour (juce::Colour (0xFFCDDC39).withAlpha (0.8f));
+            // 2 columns × 3 rows of dots
+            for (int col = 0; col < 2; ++col)
+                for (int row = 0; row < 3; ++row)
+                {
+                    const float dx = r.getX() + 3.0f + (float) col * 5.0f;
+                    const float dy = r.getY() + 3.0f + (float) row * 3.0f;
+                    g.fillRect (dx, dy, 2.0f, 2.0f);
+                }
         }
 
         void drawTabBar (juce::Graphics& g)

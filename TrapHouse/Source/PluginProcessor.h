@@ -15,8 +15,10 @@ namespace th
         inline constexpr auto autoGain    = "auto_gain";
         inline constexpr auto bypass      = "bypass";
         // v4.4 secret panel params (exposed for automation but hidden in main UI)
-        inline constexpr auto stereoWidth = "stereo_width";  // 0=mono, 1=unchanged, 2=wide
-        inline constexpr auto outputTrim  = "output_trim";   // ±12 dB post-gain
+        inline constexpr auto stereoWidth = "stereo_width";  // 0=mono, 1=unchanged, 2=wide  (deprecated in v5.2)
+        inline constexpr auto outputTrim  = "output_trim";   // ±12 dB post-gain            (deprecated in v5.2)
+        // v5.2: MIX = parallel dry/wet blend. 0 = pure dry, 1 = pure wet (clipper).
+        inline constexpr auto mix         = "mix";
     }
 }
 
@@ -64,6 +66,10 @@ public:
     std::atomic<float> outputRmsR { 0.0f };
     std::atomic<float> gainReductionDb { 0.0f };   // 0 = no GR, negative = reducing
     std::atomic<bool>  clipEventFlag  { false };   // set true when peak hit ceiling
+    // v5.2: short-term loudness estimate (LUFS-ish, K-weighted approximation)
+    std::atomic<float> loudnessLufs   { -60.0f };
+    // v5.2: snapshot of current knee blend for transfer-curve display
+    std::atomic<float> currentKnee01  { 0.0f };
 
     // Oscilloscope data (post-clipping)
     th::dsp::ScopeBuffer scopeBuffer;

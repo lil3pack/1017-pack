@@ -390,6 +390,36 @@ TrapHouseEditor::TrapHouseEditor (TrapHouseProcessor& p)
     tycoon.loadSaveState (p.tycoonState);
     addAndMakeVisible (tycoon);
 
+    // v5.2 — drag handle: wire callbacks so the editor can reposition the
+    // tycoon when the user grabs its top-right handle. The tycoon already
+    // detects the hit and fires these; the editor is free to translate the
+    // drag into updated tycoonX/tycoonY + resized().
+    tycoon.onDragHandleDown = [this] (const juce::MouseEvent& ev)
+    {
+        dragTarget = DragTarget::Tycoon;
+        // ev.getPosition() is relative to the tycoon component — convert
+        // by adding the tycoon's origin so dragOffset is in editor coords.
+        const auto editorPos = ev.getEventRelativeTo (this).getPosition();
+        dragOffset = juce::Point<float> (editorPos.x - tycoonX,
+                                          editorPos.y - tycoonY);
+    };
+    tycoon.onDragHandleDrag = [this] (const juce::MouseEvent& ev)
+    {
+        if (dragTarget != DragTarget::Tycoon) return;
+        const auto editorPos = ev.getEventRelativeTo (this).getPosition();
+        tycoonX = juce::jlimit (0.0f,
+                                 (float) (getWidth()  - tycoonW),
+                                 editorPos.x - dragOffset.x);
+        tycoonY = juce::jlimit (40.0f,
+                                 (float) (getHeight() - tycoonH),
+                                 editorPos.y - dragOffset.y);
+        resized();
+    };
+    tycoon.onDragHandleUp = [this] (const juce::MouseEvent&)
+    {
+        dragTarget = DragTarget::None;
+    };
+
     setupKnob (driveKnob);
     setupKnob (subGuardKnob);
     subGuardKnob.setVisible (false); // v5: hidden — SUB GUARD no longer in main UI
@@ -421,15 +451,14 @@ TrapHouseEditor::TrapHouseEditor (TrapHouseProcessor& p)
     autoGainAtt  = std::make_unique<APVTS::ButtonAttachment>   (apvts, th::PID::autoGain,  autoGainBtn);
     bypassAtt    = std::make_unique<APVTS::ButtonAttachment>   (apvts, th::PID::bypass,    bypassBtn);
 
-    // v4.4 Secret panel sliders (hidden by default, toggle via 3-click on title)
-    setupKnob (stereoWidthKnob);
-    setupKnob (outputTrimKnob);
-    stereoWidthKnob.setDoubleClickReturnValue (true, 1.0);
-    outputTrimKnob .setDoubleClickReturnValue (true, 0.0);
-    stereoWidthAtt = std::make_unique<APVTS::SliderAttachment> (apvts, th::PID::stereoWidth, stereoWidthKnob);
-    outputTrimAtt  = std::make_unique<APVTS::SliderAttachment> (apvts, th::PID::outputTrim,  outputTrimKnob);
-    stereoWidthKnob.setVisible (false);
-    outputTrimKnob .setVisible (false);
+    // v5.2 Secret panel: a single MIX knob + live transfer-curve display.
+    // (Old stereoWidth/outputTrim knobs were removed — user feedback they
+    // were buggy/unmusical; the APVTS params themselves stay for saved-state
+    // back-compat but have no effect on the signal chain.)
+    setupKnob (mixKnob);
+    mixKnob.setDoubleClickReturnValue (true, 1.0);
+    mixAtt = std::make_unique<APVTS::SliderAttachment> (apvts, th::PID::mix, mixKnob);
+    mixKnob.setVisible (false);
 
     // Init animation state
     for (auto& s : freqSeed) s = rng.nextFloat();
@@ -805,16 +834,16 @@ void TrapHouseEditor::paint (juce::Graphics& g)
     // v5: Lightning flash removed (chaotic). Corona + orbital particles
     // carry the MAX DRIVE energy instead.
 
-    // ---- 🔐 SECRET PANEL overlay (triggered by 3× click on title) ----
+    // ---- 🔐 MASTER LAB overlay (secret panel, triggered by 3× click on title) ----
     if (secretPanelAlpha > 0.01f)
     {
         // Dim background
         g.setColour (juce::Colours::black.withAlpha (secretPanelAlpha * 0.55f));
         g.fillAll();
 
-        // Centered panel card
-        auto panel = juce::Rectangle<int> (getWidth() / 2 - 200, getHeight() / 2 - 110,
-                                            400, 220);
+        // Centered panel card (440 × 260)
+        auto panel = juce::Rectangle<int> (getWidth() / 2 - 220, getHeight() / 2 - 130,
+                                            440, 260);
         g.setColour (P.bgDeep.withAlpha (secretPanelAlpha * 0.95f));
         g.fillRoundedRectangle (panel.toFloat(), 8.0f);
         g.setColour (P.goldHi.withAlpha (secretPanelAlpha * 0.9f));
@@ -823,29 +852,124 @@ void TrapHouseEditor::paint (juce::Graphics& g)
         // Title
         g.setColour (P.goldHi.withAlpha (secretPanelAlpha));
         g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 14.0f, juce::Font::bold));
-        g.drawText ("SECRET LAB",
-                    panel.withHeight (28).translated (0, 8),
+        g.drawText ("MASTER LAB",
+                    panel.withHeight (24).translated (0, 8),
                     juce::Justification::centred, false);
 
-        g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 9.0f, juce::Font::plain));
-        g.setColour (P.cream.withAlpha (secretPanelAlpha * 0.7f));
-        g.drawText ("STEREO WIDTH       OUTPUT TRIM",
-                    panel.withY (panel.getY() + 150).withHeight (12),
+        // Left column label: MIX
+        g.setColour (P.goldHi.withAlpha (secretPanelAlpha * 0.9f));
+        g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::bold));
+        g.drawText ("MIX",
+                    juce::Rectangle<int> (panel.getX() + 40, panel.getY() + 36, 120, 14),
+                    juce::Justification::centred, false);
+        g.setColour (P.cream.withAlpha (secretPanelAlpha * 0.55f));
+        g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 8.0f, juce::Font::plain));
+        g.drawText ("parallel dry/wet",
+                    juce::Rectangle<int> (panel.getX() + 40, panel.getY() + 168, 120, 12),
+                    juce::Justification::centred, false);
+
+        // Right column: TRANSFER CURVE header
+        g.setColour (P.goldHi.withAlpha (secretPanelAlpha * 0.9f));
+        g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::bold));
+        g.drawText ("CLIP CURVE",
+                    juce::Rectangle<int> (panel.getRight() - 200, panel.getY() + 36, 180, 14),
+                    juce::Justification::centred, false);
+
+        drawTransferCurve (g, transferCurveBounds, P, secretPanelAlpha);
+
+        // LUFS readout at the bottom
+        const float lufs = processorRef.loudnessLufs.load();
+        g.setColour (P.cream.withAlpha (secretPanelAlpha * 0.85f));
+        g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::bold));
+        g.drawText (juce::String::formatted ("SHORT-TERM LUFS  %5.1f", lufs),
+                    panel.withY (panel.getBottom() - 44).withHeight (14),
                     juce::Justification::centred, false);
 
         // Hint text
         g.setColour (P.cream.withAlpha (secretPanelAlpha * 0.5f));
         g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 8.0f, juce::Font::plain));
-        g.drawText ("click title 3x to close",
-                    panel.withY (panel.getBottom() - 20).withHeight (14),
+        g.drawText ("click title 3x to close   /   drag tycoon from its top-right handle",
+                    panel.withY (panel.getBottom() - 22).withHeight (14),
                     juce::Justification::centred, false);
 
-        // Tip about ICE + easter eggs
-        g.setColour (P.goldHi.withAlpha (secretPanelAlpha * 0.8f));
-        g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 8.5f, juce::Font::bold));
-        g.drawText ("TIP: own a LABEL in TYCOON to unlock ICE character",
-                    panel.withY (panel.getY() + 36).withHeight (14),
+        // Easter-egg tip
+        g.setColour (P.goldHi.withAlpha (secretPanelAlpha * 0.7f));
+        g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 8.0f, juce::Font::bold));
+        g.drawText ("TIP: own a LABEL HQ in the Tycoon map to unlock the ICE character",
+                    panel.withY (panel.getBottom() - 62).withHeight (12),
                     juce::Justification::centred, false);
+    }
+}
+
+//==============================================================================
+// v5.2 — Live clipper transfer-curve display inside the secret panel.
+// Samples the public shape functions at 64 points, blends hardClip / softClip
+// using the currently-active knee value that the processor publishes every
+// block. Adds a moving-signal dot so the user can SEE how hot the input is.
+//==============================================================================
+void TrapHouseEditor::drawTransferCurve (juce::Graphics& g,
+                                          juce::Rectangle<int> bounds,
+                                          const LookAndFeel1017::Palette& P,
+                                          float alpha)
+{
+    // Background plate
+    g.setColour (P.bgDeep.darker (0.3f).withAlpha (alpha * 0.9f));
+    g.fillRoundedRectangle (bounds.toFloat(), 3.0f);
+    g.setColour (P.purpleLean.withAlpha (alpha * 0.25f));
+    g.drawRoundedRectangle (bounds.toFloat(), 3.0f, 1.0f);
+
+    // Grid — 4x4 faint
+    g.setColour (P.purpleLean.withAlpha (alpha * 0.12f));
+    for (int i = 1; i < 4; ++i)
+    {
+        const float gx = bounds.getX() + bounds.getWidth()  * (float) i / 4.0f;
+        const float gy = bounds.getY() + bounds.getHeight() * (float) i / 4.0f;
+        g.fillRect (gx, (float) bounds.getY(),    1.0f, (float) bounds.getHeight());
+        g.fillRect ((float) bounds.getX(), gy, (float) bounds.getWidth(), 1.0f);
+    }
+
+    // Centre cross (x=0 / y=0 axes)
+    g.setColour (P.purpleLean.withAlpha (alpha * 0.3f));
+    g.fillRect ((float) bounds.getCentreX(), (float) bounds.getY(),   1.0f, (float) bounds.getHeight());
+    g.fillRect ((float) bounds.getX(),   (float) bounds.getCentreY(), (float) bounds.getWidth(), 1.0f);
+
+    // Identity diagonal (reference line)
+    g.setColour (P.cream.withAlpha (alpha * 0.25f));
+    g.drawLine ((float) bounds.getX(), (float) bounds.getBottom(),
+                (float) bounds.getRight(), (float) bounds.getY(), 1.0f);
+
+    // Transfer function: samples N points across x=-1..+1, blended hard+soft
+    const float knee = juce::jlimit (0.0f, 1.0f, processorRef.currentKnee01.load());
+    const int   N    = 96;
+    juce::Path curve;
+    for (int i = 0; i < N; ++i)
+    {
+        const float x  = -1.0f + 2.0f * (float) i / (float) (N - 1);
+        const float yh = th::dsp::shape::hardClip (x);
+        const float ys = th::dsp::shape::softClip (x);
+        const float y  = (1.0f - knee) * yh + knee * ys;
+        const float px = bounds.getX() + (x + 1.0f) * 0.5f * (float) bounds.getWidth();
+        const float py = bounds.getY() + (1.0f - (y + 1.0f) * 0.5f) * (float) bounds.getHeight();
+        if (i == 0) curve.startNewSubPath (px, py);
+        else        curve.lineTo (px, py);
+    }
+    g.setColour (P.gold.withAlpha (alpha * 0.95f));
+    g.strokePath (curve, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved,
+                                               juce::PathStrokeType::rounded));
+
+    // Live signal dot — project the instantaneous output RMS onto the curve
+    const float out01 = juce::jlimit (0.0f, 1.0f, processorRef.outputRms.load() * 2.0f);
+    if (out01 > 0.01f)
+    {
+        const float dx = out01;   // mapped 0..1 → right half of x-axis
+        const float dy = (1.0f - knee) * th::dsp::shape::hardClip (dx)
+                       + knee          * th::dsp::shape::softClip (dx);
+        const float px = bounds.getX() + (dx + 1.0f) * 0.5f * (float) bounds.getWidth();
+        const float py = bounds.getY() + (1.0f - (dy + 1.0f) * 0.5f) * (float) bounds.getHeight();
+        g.setColour (P.goldHi.withAlpha (alpha));
+        g.fillEllipse (px - 3.0f, py - 3.0f, 6.0f, 6.0f);
+        g.setColour (P.cream.withAlpha (alpha * 0.6f));
+        g.drawEllipse (px - 5.0f, py - 5.0f, 10.0f, 10.0f, 1.0f);
     }
 }
 
@@ -872,19 +996,27 @@ void TrapHouseEditor::resized()
     // 🎮 TYCOON v2 — draggable, default 470×200
     tycoon.setBounds ((int) tycoonX, (int) tycoonY, tycoonW, tycoonH);
 
-    // 🔐 Secret panel sliders (shown when secretPanelVisible)
-    // Positioned in the center overlay card
+    // 🔐 v5.2 MASTER LAB: single MIX knob (left side of panel) + live
+    // transfer-curve box (right side). Anchored to panel centred at
+    // (W/2, H/2) with panel size 440×260.
     const int cx = getWidth() / 2;
     const int cy = getHeight() / 2;
-    stereoWidthKnob.setBounds (cx - 150, cy - 50, 100, 100);
-    outputTrimKnob .setBounds (cx + 50,  cy - 50, 100, 100);
+    mixKnob.setBounds (cx - 180, cy - 70, 120, 120);
+    transferCurveBounds = juce::Rectangle<int> (cx + 50, cy - 70, 140, 140);
 }
 
 void TrapHouseEditor::mouseDown (const juce::MouseEvent& e)
 {
-    // 🔐 Click the title area 3× within 1.5 s to toggle the secret panel.
+    const auto p = e.getPosition();
+
+    // NB: Tycoon drag clicks are handled INSIDE the tycoon component via
+    // its onDragHandleDown callback wired in the constructor — the tycoon
+    // is a child so it receives clicks in that region first. The editor's
+    // own mouseDown only needs to care about background / title-area hits.
+
+    // 🔐 Click the title area 3× within 1.5 s to toggle the MASTER LAB.
     const juce::Rectangle<int> titleArea (getWidth() / 2 - 200, 14, 400, 50);
-    if (titleArea.contains (e.getPosition()))
+    if (titleArea.contains (p))
     {
         const int64_t now = juce::Time::currentTimeMillis();
         if (now - lastLogoClickMs < 1500)
@@ -897,19 +1029,37 @@ void TrapHouseEditor::mouseDown (const juce::MouseEvent& e)
         {
             secretPanelVisible = ! secretPanelVisible;
             logoClickCount = 0;
-            stereoWidthKnob.setVisible (secretPanelVisible);
-            outputTrimKnob .setVisible (secretPanelVisible);
+            mixKnob.setVisible (secretPanelVisible);
         }
     }
 
     // Easter egg: click the mascot (x=28-52, y~=bottom-55..bottom-29)
     const juce::Rectangle<int> mascotArea (26, getHeight() - 57, 26, 26);
-    if (mascotArea.contains (e.getPosition()))
+    if (mascotArea.contains (p))
     {
-        // Trigger a small floating message near the mascot
         stageTransitionTimer = 45;
         stageTransitionText  = "GUWOP!!!";
     }
+}
+
+void TrapHouseEditor::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragTarget == DragTarget::Tycoon)
+    {
+        const auto p = e.getPosition();
+        tycoonX = juce::jlimit (0.0f,
+                                 (float) (getWidth()  - tycoonW),
+                                 p.x - dragOffset.x);
+        tycoonY = juce::jlimit (40.0f,   // keep below the top bar
+                                 (float) (getHeight() - tycoonH),
+                                 p.y - dragOffset.y);
+        resized();
+    }
+}
+
+void TrapHouseEditor::mouseUp (const juce::MouseEvent&)
+{
+    dragTarget = DragTarget::None;
 }
 
 void TrapHouseEditor::timerCallback()

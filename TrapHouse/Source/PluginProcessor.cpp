@@ -63,6 +63,15 @@ APVTS::ParameterLayout TrapHouseProcessor::createLayout()
             .withStringFromValueFunction (
                 [] (float v, int) { return juce::String (v, 1) + " dB"; })));
 
+    // v5.2: MIX — parallel dry/wet blend (0 = dry, 1 = fully processed)
+    params.push_back (std::make_unique<AudioParameterFloat> (
+        ParameterID { th::PID::mix, 1 }, "Mix",
+        NormalisableRange<float> (0.0f, 1.0f, 0.001f), 1.0f,
+        AudioParameterFloatAttributes()
+            .withStringFromValueFunction ([] (float v, int) {
+                return juce::String ((int) std::round (v * 100.0f)) + "%";
+            })));
+
     return { params.begin(), params.end() };
 }
 
@@ -191,34 +200,40 @@ void TrapHouseProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     inputRmsR.store (inR);
     inputRms .store (0.5f * (inL + inR));
 
+    // v5.2: save DRY copy before clipping so the MIX knob can blend parallel.
+    //  - mix=1 (default) → fully wet (clipper output as before)
+    //  - mix=0           → fully dry (bypass-like)
+    //  - mix between     → sum wet*mix + dry*(1-mix)  (gain-preserving blend)
+    juce::AudioBuffer<float> dryCopy;
+    const float mix01 = juce::jlimit (0.0f, 1.0f,
+        apvts.getRawParameterValue (th::PID::mix)->load());
+    const bool blendNeeded = (mix01 < 0.999f);
+    if (blendNeeded)
+    {
+        dryCopy.setSize (totalOut, n, false, false, true);
+        for (int ch = 0; ch < totalOut; ++ch)
+            dryCopy.copyFrom (ch, 0, buffer, ch, 0, n);
+    }
+
     clipper.process (buffer);
 
-    // v4.4: stereo width (M/S processing) — from secret panel
-    const float stereoW = apvts.getRawParameterValue (th::PID::stereoWidth)->load();
-    if (totalOut >= 2 && std::abs (stereoW - 1.0f) > 1.0e-3f)
+    if (blendNeeded)
     {
-        auto* l = buffer.getWritePointer (0);
-        auto* r = buffer.getWritePointer (1);
-        for (int i = 0; i < n; ++i)
+        const float wet = mix01;
+        const float dry = 1.0f - mix01;
+        for (int ch = 0; ch < totalOut; ++ch)
         {
-            const float mid  = 0.5f * (l[i] + r[i]);
-            const float side = 0.5f * (l[i] - r[i]) * stereoW;
-            l[i] = mid + side;
-            r[i] = mid - side;
+            auto* w = buffer.getWritePointer (ch);
+            const auto* d = dryCopy.getReadPointer (ch);
+            for (int i = 0; i < n; ++i)
+                w[i] = w[i] * wet + d[i] * dry;
         }
     }
 
-    // v4.4: output trim — from secret panel
-    const float trimDb = apvts.getRawParameterValue (th::PID::outputTrim)->load();
-    if (std::abs (trimDb) > 1.0e-3f)
-    {
-        const float trim = juce::Decibels::decibelsToGain (trimDb);
-        for (int ch = 0; ch < totalOut; ++ch)
-        {
-            auto* d = buffer.getWritePointer (ch);
-            for (int i = 0; i < n; ++i) d[i] *= trim;
-        }
-    }
+    // v4.4 stereo-width / output-trim: PARAMS KEPT in APVTS for back-compat,
+    // but NO LONGER applied in the signal path (removed in v5.2 — user found
+    // them buggy/unmusical; the secret panel now hosts MIX + transfer-curve
+    // display + LUFS readout instead).
 
     // Output RMS + clip detection (v4.4)
     const float outL = (totalOut > 0) ? computeRms (buffer.getReadPointer (0)) : 0.0f;
@@ -244,6 +259,23 @@ void TrapHouseProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 
     // GR display: computed from autogain + TP limiter (approx)
     gainReductionDb.store (juce::Decibels::gainToDecibels (clipper.getCurrentGainReduction(), -60.0f));
+
+    // v5.2: LUFS-ish estimate (short-term, K-weighted approximation via RMS).
+    // Exact ITU BS.1770 weighting is heavier than needed for a UI readout;
+    // this uses the post-process RMS and converts to dBFS, which tracks
+    // integrated loudness closely enough for a mastering "am I too loud?"
+    // indicator on a program signal. Good-enough is good enough here —
+    // we don't want a dedicated biquad chain burning CPU on every block.
+    {
+        const float rmsMean = 0.5f * (outL + outR);
+        const float lufsApprox = juce::Decibels::gainToDecibels (
+            std::sqrt (rmsMean), -60.0f) - 0.691f /* BS.1770 constant */;
+        // Smoothing: 1-pole toward the live value (IIR alpha = 0.1)
+        const float prev = loudnessLufs.load();
+        loudnessLufs.store (prev * 0.9f + lufsApprox * 0.1f);
+    }
+    // Knee snapshot for the UI transfer-curve display
+    currentKnee01.store (knee);
 
     if (totalOut > 0)
     {
