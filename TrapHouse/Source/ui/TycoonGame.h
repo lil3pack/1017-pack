@@ -263,6 +263,30 @@ namespace th::game
         juce::Colour colour;
     };
 
+    // v6.1 — ambient particle system (music notes, smoke, sparks, crowd).
+    // Limited pool + per-frame decay keeps the CPU cost tiny.
+    enum class ParticleKind : int
+    {
+        Note = 0,    // music note rising — STUDIO, VENUE, BARBER
+        Smoke,       // rising smoke      — TRAP HOUSE, CRYPTO
+        Spark,       // LED blink          — CRYPTO, TURRET
+        Cash,        // $ sign floating    — any income on tick
+        Wave,        // expanding circle  — RADIO
+        Crowd        // bouncing dot      — VENUE
+    };
+
+    struct Particle
+    {
+        float x   { 0.0f };
+        float y   { 0.0f };
+        float vx  { 0.0f };
+        float vy  { 0.0f };
+        float life { 1.0f };
+        float size { 2.0f };
+        juce::Colour colour { juce::Colours::white };
+        ParticleKind kind { ParticleKind::Note };
+    };
+
     //==========================================================================
     // Phases
     //==========================================================================
@@ -395,7 +419,9 @@ namespace th::game
         {
             setOpaque (false);
             setInterceptsMouseClicks (true, false);
-            lastTickMs = juce::Time::currentTimeMillis();
+            lastTickMs   = juce::Time::currentTimeMillis();
+            cycleStartMs = lastTickMs;
+            particles.reserve (128);
 
             // Default-unlocked buildings: TrapHouse, Studio, Wall, Barber
             save.unlockMask |= (1 << (int) BType::TrapHouse);
@@ -499,6 +525,9 @@ namespace th::game
         std::vector<Opp>           opps;
         std::vector<RaidWarning>   warnings;
         std::vector<FloatingText>  floaters;
+        std::vector<Particle>      particles;
+        float                      particleSpawnAccum { 0.0f };
+        int64_t                    cycleStartMs { 0 };
         juce::Random               rng;
         bool                       draggingHandle { false };
 
@@ -1058,8 +1087,162 @@ namespace th::game
             floaters.erase (std::remove_if (floaters.begin(), floaters.end(),
                 [] (const FloatingText& f) { return f.life <= 0.0f; }), floaters.end());
 
+            // v6.1 — ambient particle spawn + tick (only while Playing)
+            if (save.phase == Phase::Playing)
+                spawnAmbientParticles (dt);
+            updateParticles (dt);
+
             save.lastSavedMs = nowMs;
             repaint();
+        }
+
+        //======================================================================
+        // v6.1 — Particle system
+        //======================================================================
+        void spawnAmbientParticles (float dt)
+        {
+            // Rate-limit spawns: aim for ≤60 particles total onscreen
+            particleSpawnAccum += dt;
+            if (particleSpawnAccum < 0.25f) return;
+            particleSpawnAccum = 0.0f;
+            if (particles.size() > 80) return;
+
+            for (int c = 0; c < GRID_W; ++c)
+                for (int r = 0; r < GRID_H; ++r)
+                {
+                    const auto& t = save.grid[(size_t) c][(size_t) r];
+                    if (t.type == BType::Empty || t.hp <= 0) continue;
+                    const auto p = tileToScreen (c, r);
+                    const float cx = p.x + TILE_W * 0.5f;
+                    const float cy = p.y + TILE_H * 0.3f;
+
+                    switch (t.type)
+                    {
+                        case BType::Studio:
+                            if (rng.nextFloat() < 0.55f) emitParticle (cx, cy,
+                                (rng.nextFloat() - 0.5f) * 0.4f, -0.7f,
+                                juce::Colour (0xFFCE93D8), 1.2f, ParticleKind::Note);
+                            break;
+                        case BType::TrapHouse:
+                            if (rng.nextFloat() < 0.45f) emitParticle (cx + 8.0f, cy - 4.0f,
+                                (rng.nextFloat() - 0.5f) * 0.3f, -0.5f,
+                                juce::Colour (0xFF8D8D8D), 1.6f, ParticleKind::Smoke);
+                            break;
+                        case BType::Crypto:
+                            if (rng.nextFloat() < 0.7f) emitParticle (cx, cy,
+                                0.0f, 0.0f,
+                                juce::Colour (0xFFFF5252), 0.4f, ParticleKind::Spark);
+                            break;
+                        case BType::Radio:
+                            if (rng.nextFloat() < 0.3f) emitParticle (cx, cy - 5.0f,
+                                0.0f, 0.0f,
+                                juce::Colour (0xFFC6FF00), 2.0f, ParticleKind::Wave);
+                            break;
+                        case BType::Venue:
+                            if (rng.nextFloat() < 0.6f) emitParticle (
+                                cx + (rng.nextFloat() - 0.5f) * 16.0f,
+                                p.y + TILE_H - 3.0f, 0.0f, -0.3f,
+                                juce::Colour (0xFFFFEB3B), 0.9f, ParticleKind::Crowd);
+                            break;
+                        case BType::Barber:
+                            if (rng.nextFloat() < 0.35f) emitParticle (cx, cy,
+                                (rng.nextFloat() - 0.5f) * 0.3f, -0.6f,
+                                juce::Colour (0xFFFFB74D), 1.0f, ParticleKind::Note);
+                            break;
+                        case BType::Mansion:
+                            if (rng.nextFloat() < 0.25f) emitParticle (cx, cy - 4.0f,
+                                (rng.nextFloat() - 0.5f) * 0.5f, -0.8f,
+                                juce::Colour (0xFFFFD700), 1.2f, ParticleKind::Spark);
+                            break;
+                        default: break;
+                    }
+                }
+        }
+
+        void emitParticle (float x, float y, float vx, float vy,
+                            juce::Colour col, float life, ParticleKind kind)
+        {
+            if (particles.size() > 100) return;
+            Particle p;
+            p.x = x; p.y = y; p.vx = vx; p.vy = vy;
+            p.life = life;
+            p.size = (kind == ParticleKind::Wave ? 4.0f : 2.0f);
+            p.colour = col;
+            p.kind = kind;
+            particles.push_back (p);
+        }
+
+        void updateParticles (float dt)
+        {
+            for (auto& p : particles)
+            {
+                p.x += p.vx * 30.0f * dt;
+                p.y += p.vy * 30.0f * dt;
+                p.life -= dt / 1.5f;
+                if (p.kind == ParticleKind::Wave) p.size += 28.0f * dt;
+                if (p.kind == ParticleKind::Smoke)
+                {
+                    p.vx *= 0.95f;
+                    p.size += 12.0f * dt;
+                }
+            }
+            particles.erase (std::remove_if (particles.begin(), particles.end(),
+                [] (const Particle& p) { return p.life <= 0.0f; }), particles.end());
+        }
+
+        void drawParticles (juce::Graphics& g)
+        {
+            for (const auto& p : particles)
+            {
+                const float a = juce::jlimit (0.0f, 1.0f, p.life);
+                switch (p.kind)
+                {
+                    case ParticleKind::Note:
+                    {
+                        // Tiny musical note (♪) — stem + dot
+                        g.setColour (p.colour.withAlpha (a));
+                        g.fillRect (p.x - 0.5f, p.y - 3.0f, 1.0f, 4.0f);
+                        g.fillEllipse (p.x - 1.5f, p.y, 2.0f, 2.0f);
+                        break;
+                    }
+                    case ParticleKind::Smoke:
+                    {
+                        g.setColour (p.colour.withAlpha (a * 0.45f));
+                        g.fillEllipse (p.x - p.size * 0.5f, p.y - p.size * 0.5f,
+                                       p.size, p.size);
+                        break;
+                    }
+                    case ParticleKind::Spark:
+                    {
+                        g.setColour (p.colour.withAlpha (a));
+                        g.fillRect (p.x - 0.5f, p.y - 0.5f, 1.0f, 1.0f);
+                        break;
+                    }
+                    case ParticleKind::Cash:
+                    {
+                        g.setColour (p.colour.withAlpha (a));
+                        g.setFont (juce::Font (6.0f, juce::Font::bold));
+                        g.drawText ("$",
+                                    juce::Rectangle<int> ((int) p.x - 3, (int) p.y - 3, 6, 6),
+                                    juce::Justification::centred);
+                        break;
+                    }
+                    case ParticleKind::Wave:
+                    {
+                        g.setColour (p.colour.withAlpha (a * 0.4f));
+                        g.drawEllipse (p.x - p.size, p.y - p.size,
+                                       p.size * 2.0f, p.size * 2.0f, 1.0f);
+                        break;
+                    }
+                    case ParticleKind::Crowd:
+                    {
+                        const float bob = std::sin (p.x * 2.0f) * 0.8f;
+                        g.setColour (p.colour.withAlpha (a));
+                        g.fillEllipse (p.x - 1.0f, p.y - 1.0f + bob, 2.0f, 2.0f);
+                        break;
+                    }
+                }
+            }
         }
 
         //======================================================================
@@ -1246,14 +1429,46 @@ namespace th::game
                               getLocalBounds().withY (42).withHeight (12),
                               juce::Justification::centred, 1);
 
-            // GO TRAPPIN' button
+            // GO TRAPPIN' button — premium styling (gold gradient + shine + pulse)
             const auto btn = getGoTrappinBtnRect();
-            g.setColour (juce::Colour (0xFFC6FF00));
-            g.fillRoundedRectangle (btn.toFloat(), 6.0f);
+            const float pulse = 0.5f + 0.5f * std::sin ((float) juce::Time::currentTimeMillis() / 300.0f);
+
+            // Outer glow
+            for (int glow = 6; glow > 0; --glow)
+            {
+                g.setColour (juce::Colour (0xFFC6FF00).withAlpha (0.05f * pulse));
+                g.drawRoundedRectangle (btn.toFloat().expanded ((float) glow), 8.0f, 2.0f);
+            }
+
+            // Gradient body
+            juce::ColourGradient btnGrad (
+                juce::Colour (0xFFFFEE58), (float) btn.getX(), (float) btn.getY(),
+                juce::Colour (0xFFFFB300), (float) btn.getX(), (float) btn.getBottom(), false);
+            g.setGradientFill (btnGrad);
+            g.fillRoundedRectangle (btn.toFloat(), 8.0f);
+
+            // Top highlight shine
+            g.setColour (juce::Colour (0xFFFFFFFF).withAlpha (0.35f));
+            g.fillRoundedRectangle (btn.toFloat().withHeight ((float) btn.getHeight() * 0.4f), 8.0f);
+
+            // Dark inset border
             g.setColour (juce::Colour (0xFF0A1000));
-            g.drawRoundedRectangle (btn.toFloat(), 6.0f, 2.0f);
-            g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 14.0f, juce::Font::bold));
+            g.drawRoundedRectangle (btn.toFloat(), 8.0f, 2.5f);
+
+            // Text
+            g.setColour (juce::Colour (0xFF0A1000));
+            g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 16.0f, juce::Font::bold));
             g.drawFittedText ("GO TRAPPIN'", btn, juce::Justification::centred, 1);
+
+            // Corner accents
+            g.setColour (juce::Colour (0xFF0A1000));
+            for (int i = 0; i < 2; ++i)
+                for (int j = 0; j < 2; ++j)
+                {
+                    const float ax = (float) btn.getX() + 6.0f + (float) i * (float) (btn.getWidth() - 14);
+                    const float ay = (float) btn.getY() + 6.0f + (float) j * (float) (btn.getHeight() - 14);
+                    g.fillRect (ax, ay, 2.0f, 2.0f);
+                }
 
             // Stats
             g.setColour (juce::Colour (0xFFF1F8E9));
@@ -1342,12 +1557,75 @@ namespace th::game
         //======================================================================
         void drawPlaying (juce::Graphics& g)
         {
+            drawSkylineBackground (g);
             drawGrid (g);
+            drawParticles (g);
             drawOpps (g);
             drawWarnings (g);
             drawHUDTop (g);
             drawHUDBottom (g);
             if (buildMenuOpen) drawBuildMenu (g);
+        }
+
+        //======================================================================
+        // v6.1 — Skyline background (parallax, day/night)
+        //======================================================================
+        void drawSkylineBackground (juce::Graphics& g)
+        {
+            const float phase = getDayNightPhase();
+            const bool  isNight = (phase > 0.55f && phase < 0.95f);
+
+            // Sky gradient transitions over the 4-minute cycle
+            const juce::Colour dawn  (0xFF2E1F4C);
+            const juce::Colour noon  (0xFF0A1533);
+            const juce::Colour dusk  (0xFF3B1020);
+            const juce::Colour night (0xFF05070F);
+            juce::Colour skyA, skyB;
+            if (phase < 0.25f)       { skyA = dawn.interpolatedWith  (noon,  phase / 0.25f);        skyB = skyA.darker (0.2f); }
+            else if (phase < 0.5f)   { skyA = noon.interpolatedWith  (dusk,  (phase - 0.25f) / 0.25f); skyB = skyA.darker (0.2f); }
+            else if (phase < 0.75f)  { skyA = dusk.interpolatedWith  (night, (phase - 0.5f)  / 0.25f); skyB = skyA.darker (0.2f); }
+            else                     { skyA = night.interpolatedWith (dawn,  (phase - 0.75f) / 0.25f); skyB = skyA.darker (0.2f); }
+
+            juce::ColourGradient sky (skyA, 0.0f, 0.0f,
+                                       skyB, 0.0f, (float) getHeight() * 0.6f, false);
+            g.setGradientFill (sky);
+            g.fillRect (0, HUD_TOP_H,
+                        getWidth(), gridRect.getY() - HUD_TOP_H
+                        + (int) ((float) gridRect.getHeight() * 0.35f));
+
+            // Stars at night
+            if (isNight)
+            {
+                juce::Random starRng (4242);
+                for (int i = 0; i < 36; ++i)
+                {
+                    const int sx = starRng.nextInt (getWidth());
+                    const int sy = HUD_TOP_H + starRng.nextInt (gridRect.getHeight() / 2);
+                    const float tw = 0.4f + 0.6f * std::sin (phase * 40.0f + (float) i);
+                    g.setColour (juce::Colours::white.withAlpha (0.25f + 0.4f * tw));
+                    g.fillRect ((float) sx, (float) sy, 1.0f, 1.0f);
+                }
+            }
+
+            // Far-background city silhouette (drawn behind grid)
+            const int skylineY = gridRect.getY() - 2;
+            for (int i = 0; i < 18; ++i)
+            {
+                const int h = 18 + (i * 13) % 22;
+                const int w = 22 + (i * 7)  % 12;
+                const int bx = -10 + i * 28 + (int) (getDayNightPhase() * 4.0f) % 30;
+                g.setColour (isNight ? juce::Colour (0xFF0A0F18) : juce::Colour (0xFF15233A));
+                g.fillRect (bx, skylineY - h, w, h);
+                // Windows (subset lit at night)
+                for (int wr = 0; wr < h / 6; ++wr)
+                    for (int wc = 0; wc < w / 6; ++wc)
+                    {
+                        const bool lit = isNight && ((i + wr + wc) * 5 % 7 != 0);
+                        g.setColour (lit ? juce::Colour (0xFFFFEB3B).withAlpha (0.7f)
+                                          : juce::Colour (0xFF1E3350).withAlpha (0.4f));
+                        g.fillRect (bx + 2 + wc * 6, skylineY - h + 2 + wr * 6, 2, 2);
+                    }
+            }
         }
 
         void drawGrid (juce::Graphics& g)
@@ -1401,37 +1679,53 @@ namespace th::game
         {
             const auto p  = tileToScreen (c, r);
             const auto& B = getBuildings()[(size_t) t.type];
-            const juce::Rectangle<float> body (p.x + 2, p.y + 2, TILE_W - 4, TILE_H - 4);
-
-            // Damage tint
+            const juce::Rectangle<float> body (p.x + 2.0f, p.y + 2.0f, TILE_W - 4.0f, TILE_H - 4.0f);
             const float hpF = (B.hp > 0) ? (float) t.hp / (float) (B.hp * juce::jmax (1, t.level)) : 1.0f;
-            const auto colour = B.colour.withBrightness (0.5f + 0.4f * hpF);
-            g.setColour (colour);
-            g.fillRoundedRectangle (body, 3.0f);
+            const bool  isNight = isNightPhase();
 
-            // Inner highlight
-            g.setColour (B.colour.brighter (0.3f).withAlpha (0.4f));
-            g.fillRoundedRectangle (body.withHeight (body.getHeight() * 0.3f), 3.0f);
+            // Shadow under the building (offset 2px down-right)
+            g.setColour (juce::Colour (0xFF000000).withAlpha (0.35f));
+            g.fillRoundedRectangle (body.translated (1.5f, 2.0f), 3.0f);
 
-            // Outline
-            g.setColour (juce::Colour (0xFF0A1000));
-            g.drawRoundedRectangle (body, 3.0f, 1.0f);
+            // Per-building sprite
+            switch (t.type)
+            {
+                case BType::TrapHouse: drawTrapHouseSprite (g, body, t.level, isNight); break;
+                case BType::Studio:    drawStudioSprite    (g, body, t.level, isNight); break;
+                case BType::Booth:     drawBoothSprite     (g, body, t.level, isNight); break;
+                case BType::Label:     drawLabelSprite     (g, body, t.level, isNight); break;
+                case BType::Merch:     drawMerchSprite     (g, body, t.level, isNight); break;
+                case BType::Radio:     drawRadioSprite     (g, body, t.level, isNight); break;
+                case BType::Venue:     drawVenueSprite     (g, body, t.level, isNight); break;
+                case BType::Barber:    drawBarberSprite    (g, body, t.level, isNight); break;
+                case BType::Mansion:   drawMansionSprite   (g, body, t.level, isNight); break;
+                case BType::Armory:    drawArmorySprite    (g, body, t.level, isNight); break;
+                case BType::Turret:    drawTurretSprite    (g, body, t.level, isNight); break;
+                case BType::Wall:      drawWallSprite      (g, body, t.level, isNight); break;
+                case BType::Crypto:    drawCryptoSprite    (g, body, t.level, isNight); break;
+                default: break;
+            }
 
-            // Featured bonus glow
+            // Damage dim overlay (red wash if hp low)
+            if (hpF < 0.5f)
+            {
+                g.setColour (juce::Colour (0xFFFF1744).withAlpha ((0.5f - hpF) * 0.8f));
+                g.fillRoundedRectangle (body, 3.0f);
+            }
+
+            // Featured bonus glow (animated)
             if ((int) t.type == save.featuredBType)
             {
-                g.setColour (juce::Colour (0xFFFFEB3B).withAlpha (0.7f));
+                const float glowPulse = 0.5f + 0.5f * std::sin ((float) save.runTick * 0.15f);
+                g.setColour (juce::Colour (0xFFFFEB3B).withAlpha (0.4f + glowPulse * 0.4f));
                 g.drawRoundedRectangle (body.expanded (1.0f), 3.0f, 1.2f);
             }
 
-            // Short name text
-            g.setColour (juce::Colour (0xFFF1F8E9));
-            g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 7.0f, juce::Font::bold));
-            g.drawFittedText (B.shortName,
-                              body.toNearestInt().withY ((int) body.getCentreY() - 4).withHeight (8),
-                              juce::Justification::centred, 1);
+            // Outline (subtle)
+            g.setColour (juce::Colour (0xFF0A1000).withAlpha (0.6f));
+            g.drawRoundedRectangle (body, 3.0f, 1.0f);
 
-            // Level pips
+            // Level pips (top-left corner, gold)
             for (int i = 0; i < juce::jmin (t.level, 5); ++i)
             {
                 g.setColour (juce::Colour (0xFFFFEB3B));
@@ -1447,6 +1741,390 @@ namespace th::game
             g.fillRect (bx, by, bw, 1.5f);
             g.setColour (juce::Colour (0xFFFF5252).interpolatedWith (juce::Colour (0xFFC6FF00), hpF));
             g.fillRect (bx, by, bw * hpF, 1.5f);
+        }
+
+        //======================================================================
+        // v6.1 — Per-building pixel sprites (each is hand-drawn inside `body`).
+        // body dims are typically 38×22 so sprites are drawn relative to the
+        // rect origin. Each respects isNight for lit windows / night tints.
+        //======================================================================
+        bool isNightPhase() const
+        {
+            const double periodMs = 4.0 * 60.0 * 1000.0;
+            const double t = (double) ((juce::Time::currentTimeMillis() - cycleStartMs)
+                                        % (int64_t) periodMs);
+            const float phase = (float) (t / periodMs);
+            return (phase > 0.55f && phase < 0.95f);
+        }
+
+        float getDayNightPhase() const
+        {
+            const double periodMs = 4.0 * 60.0 * 1000.0;
+            const double t = (double) ((juce::Time::currentTimeMillis() - cycleStartMs)
+                                        % (int64_t) periodMs);
+            return (float) (t / periodMs);
+        }
+
+        void drawTrapHouseSprite (juce::Graphics& g, juce::Rectangle<float> r, int lv, bool isNight)
+        {
+            // Base wall (wooden brown)
+            g.setColour (juce::Colour (0xFF5D4037));
+            g.fillRect (r.withY (r.getY() + r.getHeight() * 0.45f));
+            // Red triangle roof
+            juce::Path roof;
+            roof.addTriangle (r.getX() - 1.0f, r.getY() + r.getHeight() * 0.5f,
+                              r.getRight() + 1.0f, r.getY() + r.getHeight() * 0.5f,
+                              r.getCentreX(), r.getY() + 2.0f);
+            g.setColour (juce::Colour (0xFF8B0000));
+            g.fillPath (roof);
+            // Window (lit at night)
+            g.setColour (isNight ? juce::Colour (0xFFFFEB3B) : juce::Colour (0xFF37474F));
+            g.fillRect (r.getX() + 4.0f, r.getY() + r.getHeight() * 0.6f, 5.0f, 4.0f);
+            // Door
+            g.setColour (juce::Colour (0xFF212121));
+            g.fillRect (r.getRight() - 8.0f, r.getY() + r.getHeight() * 0.55f,
+                        5.0f, r.getHeight() * 0.45f - 2.0f);
+            // Chimney
+            g.setColour (juce::Colour (0xFF424242));
+            g.fillRect (r.getCentreX() + r.getWidth() * 0.2f, r.getY() + 2.0f, 3.0f, 5.0f);
+            // Graffiti tags (level count)
+            for (int i = 0; i < juce::jmin (lv - 1, 3); ++i)
+            {
+                g.setColour (juce::Colour (0xFFC6FF00).withAlpha (0.7f));
+                g.fillRect (r.getCentreX() - 6.0f + (float) i * 4.0f,
+                            r.getY() + r.getHeight() * 0.55f, 3.0f, 1.0f);
+            }
+        }
+
+        void drawStudioSprite (juce::Graphics& g, juce::Rectangle<float> r, int lv, bool isNight)
+        {
+            // Purple box
+            g.setColour (juce::Colour (0xFF4527A0));
+            g.fillRect (r);
+            // Window strip
+            g.setColour (isNight ? juce::Colour (0xFFFFEB3B) : juce::Colour (0xFF757575));
+            for (int i = 0; i < juce::jmin (3 + lv, 5); ++i)
+            {
+                g.fillRect (r.getX() + 3.0f + (float) i * 6.0f,
+                            r.getY() + r.getHeight() * 0.55f, 3.0f, 3.0f);
+            }
+            // Rotating record on top
+            const float spin = (float) save.runTick * 0.25f;
+            const float cx = r.getCentreX();
+            const float cy = r.getY() + 4.0f;
+            g.setColour (juce::Colour (0xFF0A1000));
+            g.fillEllipse (cx - 4.0f, cy - 2.0f, 8.0f, 4.0f);
+            // Record groove (rotating dot)
+            g.setColour (juce::Colour (0xFFFFEB3B));
+            g.fillEllipse (cx + std::cos (spin) * 1.5f - 1.0f,
+                           cy + std::sin (spin) * 0.5f - 1.0f, 2.0f, 2.0f);
+            // Mic on side
+            g.setColour (juce::Colour (0xFFFFD700));
+            g.fillEllipse (r.getRight() - 6.0f, r.getY() + 6.0f, 3.0f, 3.0f);
+        }
+
+        void drawBoothSprite (juce::Graphics& g, juce::Rectangle<float> r, int lv, bool isNight)
+        {
+            juce::ignoreUnused (lv);
+            // Acoustic foam wall pattern
+            g.setColour (juce::Colour (0xFFE65100));
+            g.fillRect (r);
+            g.setColour (juce::Colour (0xFF5D2E00));
+            for (int i = 0; i < 4; ++i)
+                for (int j = 0; j < 3; ++j)
+                {
+                    const float wx = r.getX() + 2.0f + (float) i * 8.0f;
+                    const float wy = r.getY() + 2.0f + (float) j * 6.0f;
+                    g.fillRect (wx, wy, 3.0f, 3.0f);
+                }
+            // Floating mic in centre
+            g.setColour (juce::Colour (0xFFFFEB3B));
+            g.fillEllipse (r.getCentreX() - 2.0f, r.getCentreY() - 2.0f, 4.0f, 4.0f);
+            g.setColour (juce::Colour (0xFF0A1000));
+            g.fillRect (r.getCentreX() - 0.5f, r.getCentreY() + 2.0f, 1.0f, 4.0f);
+            juce::ignoreUnused (isNight);
+        }
+
+        void drawLabelSprite (juce::Graphics& g, juce::Rectangle<float> r, int lv, bool isNight)
+        {
+            // Tall blue glass tower
+            juce::ColourGradient glass (
+                juce::Colour (0xFF1565C0), r.getX(), r.getY(),
+                juce::Colour (0xFF0D47A1), r.getX(), r.getBottom(), false);
+            g.setGradientFill (glass);
+            g.fillRect (r);
+            // Window grid
+            const int rows = juce::jlimit (3, 6, 3 + lv);
+            for (int i = 0; i < rows; ++i)
+                for (int j = 0; j < 5; ++j)
+                {
+                    const bool lit = isNight && ((i * 3 + j) % 4 != 0);
+                    g.setColour (lit ? juce::Colour (0xFFFFEB3B)
+                                      : juce::Colour (0xFF1976D2).brighter (0.2f));
+                    g.fillRect (r.getX() + 2.0f + (float) j * 7.0f,
+                                r.getY() + 4.0f + (float) i * 3.0f, 2.0f, 2.0f);
+                }
+            // "1017" gold stripe on top
+            g.setColour (juce::Colour (0xFFFFD700));
+            g.fillRect (r.getX(), r.getY(), r.getWidth(), 2.0f);
+        }
+
+        void drawMerchSprite (juce::Graphics& g, juce::Rectangle<float> r, int lv, bool isNight)
+        {
+            juce::ignoreUnused (lv);
+            // Storefront — pink/magenta
+            g.setColour (juce::Colour (0xFFAD1457));
+            g.fillRect (r);
+            // Striped awning
+            for (int i = 0; i < 6; ++i)
+            {
+                g.setColour (i % 2 == 0 ? juce::Colour (0xFFFFEB3B)
+                                         : juce::Colour (0xFFD81B60));
+                g.fillRect (r.getX() + (float) i * 6.0f, r.getY() + 3.0f, 6.0f, 2.0f);
+            }
+            // Display window
+            g.setColour (isNight ? juce::Colour (0xFFFFEB3B).withAlpha (0.8f)
+                                  : juce::Colour (0xFF263238));
+            g.fillRect (r.getX() + 3.0f, r.getY() + r.getHeight() * 0.45f,
+                        r.getWidth() - 6.0f, r.getHeight() * 0.35f);
+            // "M" mannequin
+            g.setColour (juce::Colour (0xFFFFEB3B));
+            g.fillRect (r.getCentreX() - 1.0f, r.getY() + r.getHeight() * 0.5f, 2.0f, 4.0f);
+        }
+
+        void drawRadioSprite (juce::Graphics& g, juce::Rectangle<float> r, int lv, bool isNight)
+        {
+            // Low base building
+            g.setColour (juce::Colour (0xFF2E7D32));
+            g.fillRect (r.withY (r.getY() + r.getHeight() * 0.5f));
+            // Antenna rising
+            g.setColour (juce::Colour (0xFF90A4AE));
+            g.fillRect (r.getCentreX() - 0.5f, r.getY() + 1.0f, 1.0f, r.getHeight() * 0.5f);
+            // Cross-struts on antenna
+            for (int i = 0; i < 3; ++i)
+            {
+                const float yy = r.getY() + 4.0f + (float) i * 4.0f;
+                g.fillRect (r.getCentreX() - 2.5f, yy, 5.0f, 1.0f);
+            }
+            // Blinking red tip
+            const bool blink = ((juce::Time::currentTimeMillis() / 400) % 2) == 0;
+            g.setColour (blink ? juce::Colour (0xFFFF5252) : juce::Colour (0xFF880E4F));
+            g.fillRect (r.getCentreX() - 1.0f, r.getY(), 2.0f, 2.0f);
+            // Broadcast waves (only at level 2+)
+            g.setColour (juce::Colour (0xFFC6FF00).withAlpha (0.5f));
+            for (int i = 1; i <= juce::jmin (lv, 3); ++i)
+            {
+                const float rad = 4.0f + (float) i * 2.5f;
+                g.drawEllipse (r.getCentreX() - rad, r.getY() - rad + 1.0f,
+                               rad * 2.0f, rad * 2.0f, 1.0f);
+            }
+            juce::ignoreUnused (isNight);
+        }
+
+        void drawVenueSprite (juce::Graphics& g, juce::Rectangle<float> r, int lv, bool isNight)
+        {
+            // Arched dome
+            juce::Path dome;
+            dome.startNewSubPath (r.getX(), r.getBottom());
+            dome.quadraticTo (r.getCentreX(), r.getY() + 1.0f,
+                              r.getRight(), r.getBottom());
+            g.setColour (juce::Colour (0xFF8E24AA));
+            g.fillPath (dome);
+            // Entry archway
+            g.setColour (juce::Colour (0xFF0A1000));
+            g.fillRect (r.getCentreX() - 4.0f, r.getBottom() - 6.0f, 8.0f, 6.0f);
+            // Spotlights beaming up (when night)
+            if (isNight || lv >= 2)
+            {
+                g.setColour (juce::Colour (0xFFFFEB3B).withAlpha (0.4f));
+                juce::Path l, rr;
+                l.addTriangle (r.getX() + 4.0f, r.getBottom() - 10.0f,
+                                r.getX() - 2.0f, r.getY() - 2.0f,
+                                r.getX() + 10.0f, r.getY() - 2.0f);
+                rr.addTriangle (r.getRight() - 4.0f, r.getBottom() - 10.0f,
+                                 r.getRight() + 2.0f, r.getY() - 2.0f,
+                                 r.getRight() - 10.0f, r.getY() - 2.0f);
+                g.fillPath (l); g.fillPath (rr);
+            }
+        }
+
+        void drawBarberSprite (juce::Graphics& g, juce::Rectangle<float> r, int lv, bool isNight)
+        {
+            juce::ignoreUnused (lv); juce::ignoreUnused (isNight);
+            // Shop front
+            g.setColour (juce::Colour (0xFFFF9800));
+            g.fillRect (r);
+            // Barber pole (animated stripes)
+            const float cx = r.getX() + 4.0f;
+            const float cy = r.getCentreY();
+            const int phase = (int) ((juce::Time::currentTimeMillis() / 100) % 4);
+            for (int i = 0; i < 5; ++i)
+            {
+                const int stripe = (i + phase) % 3;
+                const juce::Colour col = stripe == 0 ? juce::Colour (0xFFFFFFFF)
+                                         : stripe == 1 ? juce::Colour (0xFFE53935)
+                                                        : juce::Colour (0xFF1E88E5);
+                g.setColour (col);
+                g.fillRect (cx - 1.5f, cy - 6.0f + (float) i * 2.5f, 3.0f, 2.5f);
+            }
+            // Scissors logo
+            g.setColour (juce::Colour (0xFFF1F8E9));
+            g.setFont (juce::Font (7.0f, juce::Font::bold));
+            g.drawText ("BRB",
+                        juce::Rectangle<int> ((int) r.getX() + 12, (int) r.getCentreY() - 4, 20, 8),
+                        juce::Justification::centred);
+        }
+
+        void drawMansionSprite (juce::Graphics& g, juce::Rectangle<float> r, int lv, bool isNight)
+        {
+            juce::ignoreUnused (lv);
+            // Wide cream base
+            g.setColour (juce::Colour (0xFFFFF8DC));
+            g.fillRect (r.withY (r.getY() + r.getHeight() * 0.35f));
+            // Gold pediment triangle
+            juce::Path ped;
+            ped.addTriangle (r.getX() - 1.0f, r.getY() + r.getHeight() * 0.35f,
+                             r.getRight() + 1.0f, r.getY() + r.getHeight() * 0.35f,
+                             r.getCentreX(), r.getY() + 2.0f);
+            g.setColour (juce::Colour (0xFFFFD700));
+            g.fillPath (ped);
+            // Columns
+            for (int i = 0; i < 4; ++i)
+            {
+                g.setColour (juce::Colour (0xFFFFFFFF));
+                g.fillRect (r.getX() + 4.0f + (float) i * 8.0f,
+                            r.getY() + r.getHeight() * 0.4f, 2.0f, r.getHeight() * 0.55f);
+            }
+            // Red door centered
+            g.setColour (juce::Colour (0xFF8B0000));
+            g.fillRect (r.getCentreX() - 2.0f, r.getY() + r.getHeight() * 0.65f,
+                        4.0f, r.getHeight() * 0.35f);
+            // Gold dome on top
+            g.setColour (juce::Colour (0xFFFFD700));
+            g.fillEllipse (r.getCentreX() - 3.0f, r.getY() - 2.0f, 6.0f, 4.0f);
+            // Prestige stars
+            for (int i = 0; i < juce::jmin (save.prestige, 5); ++i)
+            {
+                g.setColour (juce::Colour (0xFFFFEB3B));
+                g.fillRect (r.getX() + 2.0f + (float) i * 3.0f, r.getY() - 5.0f, 2.0f, 2.0f);
+            }
+            juce::ignoreUnused (isNight);
+        }
+
+        void drawArmorySprite (juce::Graphics& g, juce::Rectangle<float> r, int lv, bool isNight)
+        {
+            juce::ignoreUnused (lv); juce::ignoreUnused (isNight);
+            // Gray bunker
+            g.setColour (juce::Colour (0xFF37474F));
+            g.fillRect (r);
+            // Barbed wire on top
+            for (int i = 0; i < 7; ++i)
+            {
+                g.setColour (juce::Colour (0xFFBDBDBD));
+                g.fillRect (r.getX() + (float) i * 6.0f, r.getY(), 2.0f, 1.0f);
+                g.fillRect (r.getX() + 2.0f + (float) i * 6.0f, r.getY() - 1.0f, 1.0f, 2.0f);
+            }
+            // Crossed guns logo
+            g.setColour (juce::Colour (0xFFFFEB3B));
+            g.drawLine (r.getCentreX() - 5.0f, r.getCentreY() + 2.0f,
+                         r.getCentreX() + 5.0f, r.getCentreY() - 2.0f, 1.5f);
+            g.drawLine (r.getCentreX() - 5.0f, r.getCentreY() - 2.0f,
+                         r.getCentreX() + 5.0f, r.getCentreY() + 2.0f, 1.5f);
+            // Door
+            g.setColour (juce::Colour (0xFF0A1000));
+            g.fillRect (r.getCentreX() - 3.0f, r.getBottom() - 7.0f, 6.0f, 7.0f);
+        }
+
+        void drawTurretSprite (juce::Graphics& g, juce::Rectangle<float> r, int lv, bool isNight)
+        {
+            juce::ignoreUnused (lv); juce::ignoreUnused (isNight);
+            // Pedestal
+            g.setColour (juce::Colour (0xFF455A64));
+            g.fillRect (r.getCentreX() - 6.0f, r.getY() + r.getHeight() * 0.5f, 12.0f, r.getHeight() * 0.5f);
+            // Rotating gun — aim toward nearest opp
+            float angle = 0.0f;
+            if (! opps.empty())
+            {
+                float bestD = 1e30f; int bestI = 0;
+                for (size_t i = 0; i < opps.size(); ++i)
+                {
+                    const float dx = opps[i].x * TILE_W + TILE_W * 0.5f
+                                    - (r.getCentreX() - tileToScreen (0, 0).x);
+                    const float dy = opps[i].y * TILE_H + TILE_H * 0.5f
+                                    - (r.getCentreY() - tileToScreen (0, 0).y);
+                    const float d = dx * dx + dy * dy;
+                    if (d < bestD) { bestD = d; bestI = (int) i; }
+                }
+                const float dx = opps[(size_t) bestI].x - ((r.getCentreX() - tileToScreen (0,0).x) / TILE_W);
+                const float dy = opps[(size_t) bestI].y - ((r.getCentreY() - tileToScreen (0,0).y) / TILE_H);
+                angle = std::atan2 (dy, dx);
+            }
+            // Base circle
+            g.setColour (juce::Colour (0xFF263238));
+            g.fillEllipse (r.getCentreX() - 4.0f, r.getCentreY() - 2.0f, 8.0f, 6.0f);
+            // Barrel
+            g.setColour (juce::Colour (0xFFFFEB3B));
+            const float bx2 = r.getCentreX() + std::cos (angle) * 8.0f;
+            const float by2 = r.getCentreY() + 1.0f + std::sin (angle) * 6.0f;
+            g.drawLine (r.getCentreX(), r.getCentreY() + 1.0f, bx2, by2, 2.0f);
+        }
+
+        void drawWallSprite (juce::Graphics& g, juce::Rectangle<float> r, int lv, bool isNight)
+        {
+            juce::ignoreUnused (lv); juce::ignoreUnused (isNight);
+            // Brick pattern
+            g.setColour (juce::Colour (0xFF6D4C41));
+            g.fillRect (r);
+            g.setColour (juce::Colour (0xFF3E2723));
+            for (int row = 0; row < 4; ++row)
+            {
+                const float offset = (row % 2 == 0) ? 0.0f : 4.0f;
+                for (int col = 0; col < 5; ++col)
+                {
+                    const float x = r.getX() + offset + (float) col * 8.0f;
+                    const float y = r.getY() + (float) row * 5.0f;
+                    if (x > r.getRight() - 1.0f) continue;
+                    g.drawRect (x, y, 8.0f, 5.0f, 0.5f);
+                }
+            }
+            // Barbed on top (level 2+)
+            if (r.getHeight() > 15.0f)
+            {
+                g.setColour (juce::Colour (0xFFBDBDBD));
+                for (int i = 0; i < 6; ++i)
+                    g.fillRect (r.getX() + (float) i * 7.0f, r.getY(), 1.0f, 1.0f);
+            }
+        }
+
+        void drawCryptoSprite (juce::Graphics& g, juce::Rectangle<float> r, int lv, bool isNight)
+        {
+            juce::ignoreUnused (isNight);
+            // Server rack — dark metal
+            g.setColour (juce::Colour (0xFF263238));
+            g.fillRect (r);
+            // Rows of server units with blinking LEDs
+            const int rows = 3 + juce::jmin (lv, 3);
+            for (int i = 0; i < rows; ++i)
+            {
+                const float y = r.getY() + 2.0f + (float) i * ((r.getHeight() - 4.0f) / rows);
+                // Server unit line
+                g.setColour (juce::Colour (0xFF37474F));
+                g.fillRect (r.getX() + 2.0f, y, r.getWidth() - 4.0f, 2.0f);
+                // LEDs
+                const int ledState = (int) ((juce::Time::currentTimeMillis() / 150 + i * 7) % 4);
+                for (int j = 0; j < 5; ++j)
+                {
+                    const juce::Colour led =
+                        ((ledState + j) % 4 == 0) ? juce::Colour (0xFFFF5252)
+                        : ((ledState + j) % 4 == 1) ? juce::Colour (0xFFC6FF00)
+                                                     : juce::Colour (0xFF1A2500);
+                    g.setColour (led);
+                    g.fillRect (r.getX() + 3.0f + (float) j * 6.0f, y + 0.5f, 1.0f, 1.0f);
+                }
+            }
+            // Heat shimmer (top)
+            g.setColour (juce::Colour (0xFFFF5252).withAlpha (0.2f));
+            g.fillRect (r.getX(), r.getY(), r.getWidth(), 1.5f);
         }
 
         void drawOpps (juce::Graphics& g)
