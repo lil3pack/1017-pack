@@ -27,28 +27,29 @@ namespace th::dsp
             return ax <= 1.0f ? x * x * 0.5f : ax - 0.5f;
         }
 
-        // Level-matched soft clip: tanh(g*x) / tanh(g)
-        // Always maps |x|=1 to |y|=1 exactly, regardless of sharpness.
-        inline float softClip (float x, float g) noexcept
+        // v4.1 FIX: plain tanh soft-clip.
+        //
+        // PREVIOUS BUG (v3 level-matched soft clip = tanh(g*x)/tanh(g)):
+        //   At high sharpness g (low knee), the slope at x=0 is g/tanh(g)
+        //   which is >> 1. E.g. at knee=0, g=5.5 → slope near 0 is 5.5.
+        //   That AMPLIFIED small signals by +15 dB.
+        //   Blended with hard clip, this produced audible crackle at DRIVE=0
+        //   (signals below ceiling got compressed UPWARD → distortion).
+        //
+        // FIX: plain tanh(x). Slope at 0 = 1 (unity gain). Saturates at ±1.
+        // KNEE now controls only the hard/soft blend, not the soft sharpness.
+        // Clean, predictable, matches Saturn 2 / Decapitator behavior.
+        inline float softClip (float x) noexcept
         {
-            const float ty = std::tanh (g * x);
-            const float tg = std::tanh (g);
-            return ty / tg;
+            return std::tanh (x);
         }
 
-        // Antiderivative of the level-matched soft clip:
-        //   F(x) = log(cosh(g*x)) / (g * tanh(g))
-        // Numerically stable for large |g*x| (cosh overflows float32 > ~88).
-        // Uses the asymptote log(cosh(z)) ≈ |z| - log(2) for |z| > 20.
-        inline float F_softClip (float x, float g) noexcept
+        // Antiderivative: F(x) = log(cosh(x)), numerically stable for large |x|.
+        inline float F_softClip (float x) noexcept
         {
-            const float gx    = g * x;
-            const float absgx = std::abs (gx);
-            const float logCosh = (absgx > 20.0f)
-                ? (absgx - 0.693147181f /* log(2) */)
-                : std::log (std::cosh (gx));
-            const float tg = std::tanh (g);
-            return logCosh / (g * tg);
+            const float ax = std::abs (x);
+            return (ax > 20.0f) ? (ax - 0.693147181f /* log(2) */)
+                                : std::log (std::cosh (x));
         }
     }
 
@@ -227,8 +228,9 @@ namespace th::dsp
             const float sr = (float) sampleRate;
             // v4.1: slower attack (2 ms vs 0.5 ms) — avoids "clicks" on small
             // transient overshoots that were a source of audible crackle.
-            attCoeff = std::exp (-1.0f / (sr * 0.002f));  // 2 ms attack
-            relCoeff = std::exp (-1.0f / (sr * 0.080f));  // 80 ms release (slightly longer, smoother)
+            // v4.2: attack 5 ms (was 2 ms) — gentler on dense program material.
+            attCoeff = std::exp (-1.0f / (sr * 0.005f));  // 5 ms attack
+            relCoeff = std::exp (-1.0f / (sr * 0.120f));  // 120 ms release (smoother)
         }
 
         int getLatencySamples() const noexcept { return lookAhead; }
@@ -338,10 +340,13 @@ namespace th::dsp
 
         void prepare (double sampleRate, int maxBlockSize, int numChannels)
         {
+            // v4.2 FIX: FIR linear-phase oversampler eliminates IIR ringing
+            // artifacts on transients (a hidden source of "crackle" on dense
+            // material). FIR adds ~2ms more latency than IIR but auto-compensated.
             oversampler = std::make_unique<juce::dsp::Oversampling<float>> (
                 numChannels,
                 2, // factor 2^2 = 4x
-                juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR,
+                juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple,
                 true);
 
             oversampler->initProcessing ((size_t) maxBlockSize);
@@ -486,15 +491,18 @@ namespace th::dsp
                 lowShelf.process (buffer);
 
             // --- 1.25 Transient detection (native rate, pre-oversample) ---
-            // For each incoming native sample, compute a 0-1 "transient amount".
-            // We use channel 0 as the trigger signal (stereo trigger is approx
-            // the max of L,R; here we use L — cheap and good enough for trap).
+            // v4.2: trigger on max(|L|, |R|) so stereo transients always register.
+            // (Was channel 0 only — could desync modulation on wide stereo material.)
             const int transientCacheSize = juce::jmin (numSamples, (int) cachedTransient.size());
             {
-                const auto* d = buffer.getReadPointer (0);
+                const auto* l = buffer.getReadPointer (0);
+                const auto* r = (numChannels > 1) ? buffer.getReadPointer (1) : l;
                 auto& det = transients[0];
                 for (int i = 0; i < transientCacheSize; ++i)
-                    cachedTransient[(size_t) i] = det.process (d[i]);
+                {
+                    const float mono = std::max (std::abs (l[i]), std::abs (r[i]));
+                    cachedTransient[(size_t) i] = det.process (mono);
+                }
             }
 
             // --- 1.5 SUB GUARD split (at native rate, before oversampling) ---
@@ -637,17 +645,19 @@ namespace th::dsp
                     const float xn = x / ceiling;
 
                     // ADAA: share xPrev, separate FPrev per curve.
+                    // v4.1: soft-clip is plain tanh (no sharpness parameter).
+                    // KNEE blend alone controls hard/soft balance — no
+                    // more "slope at 0" amplification bug.
                     const float dx     = xn - st.xPrev;
                     const float FhardN = shape::F_hardClip (xn);
-                    const float softG  = 0.5f + (1.0f - effKnee) * 5.0f; // effKnee uses transient modulation
-                    const float FsoftN = shape::F_softClip  (xn, softG);
+                    const float FsoftN = shape::F_softClip (xn);
 
                     float hard, soft;
                     if (std::abs (dx) < 1.0e-5f)
                     {
                         const float mid = 0.5f * (xn + st.xPrev);
                         hard = shape::hardClip (mid);
-                        soft = shape::softClip  (mid, softG);
+                        soft = shape::softClip (mid);
                     }
                     else
                     {
@@ -703,16 +713,14 @@ namespace th::dsp
                     // Soft safety clamp in normalised domain (cheap overshoot control)
                     yn = juce::jlimit (-1.0f, 1.0f, yn);
 
-                    // Back to output domain
+                    // v4.2: DC blocker REMOVED from per-sample loop.
+                    // The smooth TUBE model (tanh + bias - tanh(bias)) is already
+                    // DC-free by construction. Removing the DC blocker eliminates
+                    // its transient overshoot (HPF ringing) which was one of the
+                    // remaining crackle sources.
                     float y = yn * ceiling;
 
-                    // DC blocker (removes asymmetric processing DC)
-                    y = dc.process (y);
-
-                    // *** HARD ceiling guarantee ***
-                    // The DC blocker is a 1st-order recursive HPF and can overshoot
-                    // by ~1-2 dB on transients. Final clamp at the REAL ceiling
-                    // guarantees no peak escapes.
+                    // Hard ceiling guarantee (no overshoot)
                     y = juce::jlimit (-ceiling, ceiling, y);
 
                     d[n] = y;
@@ -760,7 +768,9 @@ namespace th::dsp
 
                 if (wetAvg > 1.0e-6 && dryAvg > 1.0e-6)
                 {
-                    const float ratio = (float) juce::jlimit (0.1, 3.0, dryAvg / wetAvg);
+                    // v4.2: tighter clamp (0.5..2.0 = ±6 dB) prevents pumping
+                    // artifacts that came from the old 0.1..3.0 range (±30 dB!).
+                    const float ratio = (float) juce::jlimit (0.5, 2.0, dryAvg / wetAvg);
                     autoGainSmoother.setTargetValue (ratio);
                 }
 

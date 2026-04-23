@@ -40,7 +40,7 @@ APVTS::ParameterLayout TrapHouseProcessor::createLayout()
         StringArray { "HARD", "TAPE", "TUBE" }, 0)); // HARD default — most aggressive maximizer vibe
 
     params.push_back (std::make_unique<AudioParameterBool> (
-        ParameterID { th::PID::autoGain, 1 }, "Auto Gain", true /* default ON */));
+        ParameterID { th::PID::autoGain, 1 }, "Auto Gain", false /* v4.2: OFF by default — user can enable manually */));
 
     params.push_back (std::make_unique<AudioParameterBool> (
         ParameterID { th::PID::bypass, 1 }, "Bypass", false));
@@ -104,19 +104,25 @@ void TrapHouseProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     //   pre low-shelf, input gain, cascade saturation, hard clip, harmonic
     //   enhance, post high-shelf, auto makeup, TP limiter.
     //
-    //   drive=0    → 0 dB   / knee 0.95 / harm 0.00 / shelf 0     — bypass
-    //   drive=0.2  → +3 dB  / knee 0.80 / harm 0.14 / shelf 0.20  — warmth
-    //   drive=0.3  → +5 dB  / knee 0.71 / harm 0.21 / shelf 0.30  — glue
-    //   drive=0.5  → +9 dB  / knee 0.53 / harm 0.35 / shelf 0.50  — fat
-    //   drive=0.7  → +13 dB / knee 0.32 / harm 0.49 / shelf 0.70  — loud
-    //   drive=1.0  → +18 dB / knee 0.05 / harm 0.70 / shelf 1.0   — EXPLODE
+    //   drive=0    → 0 dB   / knee 0.00 / harm 0.00 / shelf 0     — TRUE BYPASS (passthrough)
+    //   drive=0.2  → +3 dB  / knee 0.12 / harm 0.14 / shelf 0.20  — warmth, still transparent
+    //   drive=0.3  → +5 dB  / knee 0.18 / harm 0.21 / shelf 0.30  — glue
+    //   drive=0.5  → +9 dB  / knee 0.30 / harm 0.35 / shelf 0.50  — fat (peak soft blend)
+    //   drive=0.7  → +13 dB / knee 0.42 / harm 0.49 / shelf 0.70  — loud
+    //   drive=1.0  → +18 dB / knee 0.60 / harm 0.70 / shelf 1.0   — destructive
+    //
+    //   CRITICAL v4.2 FIX: knee mapping INVERTED.
+    //   Before: high knee at low drive = soft clip always active = compression
+    //   even at drive=0 (inaudible but a subtle source of "everything sounds
+    //   quieter/duller"). Now: drive=0 → pure hard clip which is passthrough
+    //   for signals below ceiling → true transparent bypass.
     //
     //   Ceiling stays at -1.0 dBFS; post TP limiter guarantees -1 dBTP safe.
     const float inGainDb = drive * 18.0f;
     const float ceilDb   = -1.0f;
-    const float knee     = 0.95f - drive * 0.90f;
+    const float knee     = drive * 0.60f;         // v4.2: 0 at drive=0, 0.6 at drive=1
     const float harm     = drive * 0.70f;
-    const float shelf    = drive;  // drives both pre low-shelf and post high-shelf
+    const float shelf    = drive;
 
     const float subGuard = juce::jlimit (0.0f, 1.0f,
         apvts.getRawParameterValue (th::PID::subGuard)->load());
