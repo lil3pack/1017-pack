@@ -7,15 +7,16 @@
 namespace th
 {
     // Parameter IDs — kept in one place so UI and DSP never drift.
-    // The plugin now uses a macro DRIVE knob + SUB GUARD dual-band, instead
-    // of exposing the low-level input/ceiling/knee/harmonics knobs directly.
     namespace PID
     {
-        inline constexpr auto drive     = "drive";      // macro 0-1
-        inline constexpr auto subGuard  = "sub_guard";  // dual-band amount 0-1
-        inline constexpr auto character = "character";  // HARD / TAPE / TUBE
-        inline constexpr auto autoGain  = "auto_gain";
-        inline constexpr auto bypass    = "bypass";
+        inline constexpr auto drive       = "drive";         // macro 0-1
+        inline constexpr auto subGuard    = "sub_guard";     // dual-band amount 0-1
+        inline constexpr auto character   = "character";     // HARD / TAPE / TUBE / ICE
+        inline constexpr auto autoGain    = "auto_gain";
+        inline constexpr auto bypass      = "bypass";
+        // v4.4 secret panel params (exposed for automation but hidden in main UI)
+        inline constexpr auto stereoWidth = "stereo_width";  // 0=mono, 1=unchanged, 2=wide
+        inline constexpr auto outputTrim  = "output_trim";   // ±12 dB post-gain
     }
 }
 
@@ -56,11 +57,31 @@ public:
     std::atomic<float> inputRms  { 0.0f };
     std::atomic<float> outputRms { 0.0f };
 
+    // v4.4: per-channel RMS for VU meters + clip-indicator
+    std::atomic<float> inputRmsL  { 0.0f };
+    std::atomic<float> inputRmsR  { 0.0f };
+    std::atomic<float> outputRmsL { 0.0f };
+    std::atomic<float> outputRmsR { 0.0f };
+    std::atomic<float> gainReductionDb { 0.0f };   // 0 = no GR, negative = reducing
+    std::atomic<bool>  clipEventFlag  { false };   // set true when peak hit ceiling
+
     // Oscilloscope data (post-clipping)
     th::dsp::ScopeBuffer scopeBuffer;
 
     // 🎮 1017 TYCOON persistent game state (survives plugin close/reopen)
     juce::ValueTree tycoonState { "TycoonState" };
+
+    // 🎮 Game-unlocked plugin features (read by processBlock + editor)
+    bool isIceUnlocked() const noexcept
+    {
+        if (! tycoonState.isValid()) return false;
+        return (int) tycoonState.getProperty ("count_2", 0) > 0; // LABEL count
+    }
+    bool isPrestigeActive() const noexcept
+    {
+        if (! tycoonState.isValid()) return false;
+        return (int) tycoonState.getProperty ("prestige", 0) > 0;
+    }
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();

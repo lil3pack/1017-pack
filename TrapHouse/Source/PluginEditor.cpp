@@ -39,6 +39,114 @@ namespace sprites
 }
 
 //==============================================================================
+// v4.4: Vertical VU meter with peak-hold line + gradient fill
+static void drawVuMeter (juce::Graphics& g, juce::Rectangle<float> bounds,
+                          float rms, float peakHold,
+                          const LookAndFeel1017::Palette& P,
+                          const juce::String& label)
+{
+    // Background slot
+    g.setColour (P.bgDeep);
+    g.fillRoundedRectangle (bounds, 2.0f);
+    g.setColour (P.gold.withAlpha (0.35f));
+    g.drawRoundedRectangle (bounds, 2.0f, 0.8f);
+
+    // Convert RMS (linear) → dB [-60, 0] → normalized [0, 1]
+    auto dbNorm = [] (float lin)
+    {
+        if (lin <= 1.0e-5f) return 0.0f;
+        const float db = 20.0f * std::log10 (lin);
+        return juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 60.0f);
+    };
+
+    const float levelNorm = dbNorm (rms);
+    const float peakNorm  = dbNorm (peakHold);
+
+    if (levelNorm > 0.02f)
+    {
+        const float fillH = bounds.getHeight() * levelNorm;
+        const auto fill = juce::Rectangle<float> (bounds.getX() + 1.0f,
+                                                    bounds.getBottom() - fillH,
+                                                    bounds.getWidth() - 2.0f,
+                                                    fillH);
+        juce::ColourGradient grad (juce::Colour (0xFF2DCC70), bounds.getCentreX(), bounds.getBottom(),
+                                    juce::Colour (0xFFE74C3C), bounds.getCentreX(), bounds.getY(), false);
+        grad.addColour (0.55, juce::Colour (0xFFF4D03F));
+        grad.addColour (0.80, juce::Colour (0xFFFFA726));
+        g.setGradientFill (grad);
+        g.fillRoundedRectangle (fill, 1.5f);
+    }
+
+    // Peak-hold line
+    if (peakNorm > 0.02f)
+    {
+        const float peakY = bounds.getBottom() - bounds.getHeight() * peakNorm;
+        g.setColour (juce::Colours::white.withAlpha (0.9f));
+        g.drawHorizontalLine ((int) peakY,
+                              bounds.getX() + 1.0f,
+                              bounds.getRight() - 1.0f);
+    }
+
+    // Label below (small)
+    if (label.isNotEmpty())
+    {
+        g.setColour (P.cream.withAlpha (0.6f));
+        g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 7.5f, juce::Font::bold));
+        g.drawText (label,
+                    bounds.translated (0.0f, bounds.getHeight() + 2.0f).withHeight (9.0f).toNearestInt(),
+                    juce::Justification::centred);
+    }
+}
+
+//==============================================================================
+// v4.4: Clip LED — flashes red when audio hits ceiling
+static void drawClipLed (juce::Graphics& g, juce::Rectangle<float> b,
+                          float fade, const LookAndFeel1017::Palette& P)
+{
+    // Idle: dim dark red. Triggered: bright red glow.
+    const juce::Colour ledCol = juce::Colour (0xFFFF2020).withAlpha (0.25f + fade * 0.75f);
+    g.setColour (P.bgDeep);
+    g.fillEllipse (b.expanded (1.0f));
+    g.setColour (ledCol);
+    g.fillEllipse (b);
+    if (fade > 0.1f)
+    {
+        g.setColour (juce::Colour (0xFFFF2020).withAlpha (fade * 0.3f));
+        g.fillEllipse (b.expanded (fade * 4.0f));
+    }
+}
+
+//==============================================================================
+// v4.4: GR meter — horizontal bar, fills left→right based on gain reduction (dB)
+static void drawGrMeter (juce::Graphics& g, juce::Rectangle<float> bounds,
+                          float grDb, const LookAndFeel1017::Palette& P)
+{
+    g.setColour (P.bgDeep);
+    g.fillRoundedRectangle (bounds, 2.0f);
+    g.setColour (P.gold.withAlpha (0.3f));
+    g.drawRoundedRectangle (bounds, 2.0f, 0.8f);
+
+    // GR: 0 = no reduction, -12 dB = max shown. Map to 0..1
+    const float grAbs = juce::jlimit (0.0f, 12.0f, -grDb);
+    const float norm  = grAbs / 12.0f;
+    if (norm > 0.01f)
+    {
+        const float fillW = bounds.getWidth() * norm;
+        const auto fill = juce::Rectangle<float> (bounds.getX() + 1.0f, bounds.getY() + 1.0f,
+                                                    fillW - 2.0f, bounds.getHeight() - 2.0f);
+        juce::ColourGradient grad (juce::Colour (0xFFF4D03F), bounds.getX(), bounds.getCentreY(),
+                                    juce::Colour (0xFFE74C3C), bounds.getRight(), bounds.getCentreY(), false);
+        g.setGradientFill (grad);
+        g.fillRoundedRectangle (fill, 1.5f);
+    }
+    g.setColour (P.cream.withAlpha (0.7f));
+    g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 7.5f, juce::Font::bold));
+    g.drawText ("GR " + juce::String (grDb, 1) + " dB",
+                bounds.toNearestInt(),
+                juce::Justification::centred);
+}
+
+//==============================================================================
 // LED power bar under knobs — 10 segments gold → orange → red
 static void drawLedPowerBar (juce::Graphics& g, juce::Rectangle<float> bounds,
                              float value01, const LookAndFeel1017::Palette& P)
@@ -270,7 +378,9 @@ TrapHouseEditor::TrapHouseEditor (TrapHouseProcessor& p)
       scope (p.scopeBuffer, lookAndFeel)
 {
     setLookAndFeel (&lookAndFeel);
-    setSize (780, 520);
+    // v4.3: wider layout (960×560) — properly-aligned knobs on the left,
+    // TYCOON game on the right, top-right hosts preset+character+toggles.
+    setSize (960, 560);
 
     auto& apvts = processorRef.getAPVTS();
 
@@ -282,10 +392,20 @@ TrapHouseEditor::TrapHouseEditor (TrapHouseProcessor& p)
 
     setupKnob (driveKnob);
     setupKnob (subGuardKnob);
+    subGuardKnob.setVisible (false); // v5: hidden — SUB GUARD no longer in main UI
     driveKnob   .setDoubleClickReturnValue (true, 0.35);
     subGuardKnob.setDoubleClickReturnValue (true, 0.00);
 
-    characterBox.addItemList ({ "HARD", "TAPE", "TUBE" }, 1);
+    // v5 MASTER CLASS: init 8 orbital particles around the knob
+    for (int i = 0; i < 8; ++i)
+        orbitParticles[(size_t) i] = {
+            (float) i / 8.0f * juce::MathConstants<float>::twoPi,
+            0.5f + rng.nextFloat() * 0.3f,
+            0.7f + rng.nextFloat() * 0.3f,
+            rng.nextFloat() * juce::MathConstants<float>::pi
+        };
+
+    characterBox.addItemList ({ "HARD", "TAPE", "TUBE", "ICE" }, 1);
     addAndMakeVisible (characterBox);
 
     presetBox.addItem ("PRESET", 1);
@@ -301,9 +421,20 @@ TrapHouseEditor::TrapHouseEditor (TrapHouseProcessor& p)
     autoGainAtt  = std::make_unique<APVTS::ButtonAttachment>   (apvts, th::PID::autoGain,  autoGainBtn);
     bypassAtt    = std::make_unique<APVTS::ButtonAttachment>   (apvts, th::PID::bypass,    bypassBtn);
 
+    // v4.4 Secret panel sliders (hidden by default, toggle via 3-click on title)
+    setupKnob (stereoWidthKnob);
+    setupKnob (outputTrimKnob);
+    stereoWidthKnob.setDoubleClickReturnValue (true, 1.0);
+    outputTrimKnob .setDoubleClickReturnValue (true, 0.0);
+    stereoWidthAtt = std::make_unique<APVTS::SliderAttachment> (apvts, th::PID::stereoWidth, stereoWidthKnob);
+    outputTrimAtt  = std::make_unique<APVTS::SliderAttachment> (apvts, th::PID::outputTrim,  outputTrimKnob);
+    stereoWidthKnob.setVisible (false);
+    outputTrimKnob .setVisible (false);
+
     // Init animation state
     for (auto& s : freqSeed) s = rng.nextFloat();
     particles.reserve (256);
+    glowRings.reserve (16);
 
     startTimerHz (30);
 }
@@ -369,14 +500,77 @@ void TrapHouseEditor::updateAnimation()
     if (drive > 0.85f && rng.nextFloat() < 0.05f) lightningFlash = 1.0f;
     lightningFlash *= 0.85f;
 
-    // Screen shake at MAX
-    if (drive > 0.85f)
+    // v4.4: glow rings replace screen shake. Spawn rings from knob centers at
+    // high DRIVE — they expand outward and fade. Visually "explosive" but not
+    // jerky (no element moves out of its grid position).
+    if (drive > 0.80f && rng.nextFloat() < 0.08f)
     {
-        const float I = (drive - 0.85f) * 60.0f;
-        screenShakeX = (rng.nextFloat() - 0.5f) * I;
-        screenShakeY = (rng.nextFloat() - 0.5f) * I;
+        const int knobSize = 160;
+        const int knobY    = 300;
+        const float cx = (rng.nextBool() ? 60.0f : 260.0f) + knobSize * 0.5f;
+        const float cy = (float) knobY + knobSize * 0.5f;
+        juce::Colour col = drive > 0.95f ? juce::Colour (0xFFFF3DA5)
+                         : drive > 0.88f ? juce::Colour (0xFFFF5252)
+                                          : juce::Colour (0xFFFFEE58);
+        glowRings.push_back ({ cx, cy, 20.0f, 180.0f, 1.0f, col });
     }
-    else { screenShakeX *= 0.7f; screenShakeY *= 0.7f; }
+    // Update / prune
+    for (auto& r : glowRings)
+    {
+        r.radius += (r.maxRadius - r.radius) * 0.08f;
+        r.life   *= 0.94f;
+    }
+    glowRings.erase (std::remove_if (glowRings.begin(), glowRings.end(),
+                        [] (const GlowRing& r) { return r.life < 0.02f; }),
+                      glowRings.end());
+
+    // v5 MASTER CLASS: advance orbital particles (elliptical orbits around knob)
+    for (auto& op : orbitParticles)
+        op.angle += op.speed * 0.03f * (1.0f + drive);
+
+    // v5: spawn ember stream from knob at DRIVE > 50%
+    if (drive > 0.5f && rng.nextFloat() < 0.3f)
+    {
+        const auto& P = pal (lookAndFeel);
+        emberStream.push_back ({
+            driveKnobX + (rng.nextFloat() - 0.5f) * driveKnobSize * 0.4f,
+            driveKnobY - driveKnobSize * 0.3f,
+            (rng.nextFloat() - 0.5f) * 0.8f,
+            -1.0f - rng.nextFloat() * 2.0f * drive,
+            1.0f,
+            2.0f + rng.nextFloat() * 3.0f,
+            drive > 0.85f ? P.purpleHi : P.goldHi
+        });
+    }
+    // Update + prune emberStream
+    for (auto& e : emberStream)
+    {
+        e.x += e.vx;
+        e.y += e.vy;
+        e.vy += 0.01f; // light gravity
+        e.life -= 0.015f;
+    }
+    emberStream.erase (std::remove_if (emberStream.begin(), emberStream.end(),
+                        [] (const Particle& e) { return e.life <= 0.02f || e.y < -20.0f; }),
+                      emberStream.end());
+    if (emberStream.size() > 100)
+        emberStream.erase (emberStream.begin(), emberStream.begin() + (emberStream.size() - 100));
+
+    // v5: frame flow phase advance
+    frameFlowPhase += 0.005f + drive * 0.01f;
+    if (frameFlowPhase > 1.0f) frameFlowPhase -= 1.0f;
+
+    // v4.4: VU peak-hold decay + clip LED fade
+    inPeakL  = juce::jmax (inPeakL  * 0.95f, processorRef.inputRmsL.load());
+    inPeakR  = juce::jmax (inPeakR  * 0.95f, processorRef.inputRmsR.load());
+    outPeakL = juce::jmax (outPeakL * 0.95f, processorRef.outputRmsL.load());
+    outPeakR = juce::jmax (outPeakR * 0.95f, processorRef.outputRmsR.load());
+    if (processorRef.clipEventFlag.exchange (false)) clipLedFade = 1.0f;
+    clipLedFade *= 0.88f;
+
+    // v4.4: secret panel alpha smoothing
+    const float targetAlpha = secretPanelVisible ? 1.0f : 0.0f;
+    secretPanelAlpha += (targetAlpha - secretPanelAlpha) * 0.18f;
 
     // Knob positions (must match resized())
     const int knobSize = 150;
@@ -408,10 +602,11 @@ void TrapHouseEditor::paint (juce::Graphics& g)
     const auto& P = pal (lookAndFeel);
     const float drive01 = processorRef.getAPVTS().getRawParameterValue (th::PID::drive)->load();
     const float phase = wavePhase;
+    // v5: master-class intensity curve — 0 below 50% DRIVE, 1 at 100%.
+    const float driveHot = juce::jmax (0.0f, (drive01 - 0.5f) / 0.5f);
 
-    // Apply screen shake to everything inside this save block
-    juce::Graphics::ScopedSaveState mainSave (g);
-    g.addTransform (juce::AffineTransform::translation (screenShakeX, screenShakeY));
+    // v4.4: NO MORE screen shake (too chaotic). Glow rings + intensified
+    // frame pulse + chromatic aberration carry the "MAX DRIVE" wow effect instead.
 
     // ---- Background: red glass gradient (gets hotter at high drive) ----
     const juce::Colour bgD = drive01 > 0.7f ? P.bgDeep.interpolatedWith (P.purpleLean, (drive01 - 0.7f) * 0.4f) : P.bgDeep;
@@ -420,8 +615,29 @@ void TrapHouseEditor::paint (juce::Graphics& g)
     g.setGradientFill (bg);
     g.fillAll();
 
-    // ---- 🔥 Procedural flames at bottom (only when DRIVE > 40%) ----
-    drawFlames (g, getWidth(), getHeight(), drive01, P, phase);
+    // v5: REMOVED procedural flames (too chaotic for master class vibe).
+    // Replaced by the cleaner nebula background below.
+    //
+    // Layer A: AMBIENT NEBULA — two rotating radial gradients blending on bg.
+    // Subtle at low drive, becomes visible at 50%+.
+    if (driveHot > 0.15f)
+    {
+        const float a = driveHot * 0.30f;
+        const float r1 = 0.35f + 0.15f * std::sin (phase * 0.15f);
+        const float r2 = 0.65f + 0.20f * std::cos (-phase * 0.10f);
+        juce::ColourGradient neb1 (
+            P.purpleHi.withAlpha (a), getWidth() * r1,          getHeight() * 0.4f,
+            P.bgDeep.withAlpha (0.0f), getWidth() * r1 + 380.0f, getHeight() * 0.4f, true);
+        neb1.addColour (0.6, P.purpleLean.withAlpha (a * 0.4f));
+        g.setGradientFill (neb1);
+        g.fillRect (getLocalBounds());
+        juce::ColourGradient neb2 (
+            P.gold.withAlpha (a * 0.6f), getWidth() * r2,          getHeight() * 0.6f,
+            P.bgDeep.withAlpha (0.0f),   getWidth() * r2 + 320.0f, getHeight() * 0.6f, true);
+        neb2.addColour (0.7, P.purpleLean.withAlpha (a * 0.2f));
+        g.setGradientFill (neb2);
+        g.fillRect (getLocalBounds());
+    }
 
     // ---- Thin gold frame (pulses with DRIVE) ----
     const float frameAlpha = juce::jlimit (0.0f, 1.0f,
@@ -431,43 +647,56 @@ void TrapHouseEditor::paint (juce::Graphics& g)
                             1.2f + drive01 * 1.8f);
 
     // ---- Pixel decorations (corners) ----
-    sprites::draw (g, sprites::STAR,  22.0f,  22.0f, 3.0f, P.goldHi);
-    sprites::draw (g, sprites::STAR,  720.0f, 22.0f, 2.0f, P.goldHi);
-    sprites::draw (g, sprites::COIN,  22.0f,  478.0f, 3.0f, P.goldHi);
-    sprites::draw (g, sprites::HEART, 740.0f, 478.0f, 3.0f, P.goldHi);
+    sprites::draw (g, sprites::STAR,  22.0f,  22.0f,                       3.0f, P.goldHi);
+    sprites::draw (g, sprites::STAR,  (float) getWidth() - 36.0f, 22.0f,   3.0f, P.goldHi);
 
-    // 3 LIVES hearts top-left
+    // 3 LIVES hearts top-left (under title + subtitle — y=96)
     const juce::Colour heartRed (0xFFFF5252);
-    sprites::draw (g, sprites::HEART, 18.0f, 90.0f, 2.0f, heartRed);
-    sprites::draw (g, sprites::HEART, 33.0f, 90.0f, 2.0f, heartRed);
-    sprites::draw (g, sprites::HEART, 48.0f, 90.0f, 2.0f, heartRed);
+    sprites::draw (g, sprites::HEART, 22.0f, 96.0f, 2.0f, heartRed);
+    sprites::draw (g, sprites::HEART, 37.0f, 96.0f, 2.0f, heartRed);
+    sprites::draw (g, sprites::HEART, 52.0f, 96.0f, 2.0f, heartRed);
 
-    // Pixel mascot (skull bas-gauche)
-    sprites::draw (g, sprites::MASCOT, 29.0f, 441.0f, 2.0f, P.bgDeep);
-    sprites::draw (g, sprites::MASCOT, 28.0f, 440.0f, 2.0f, P.goldHi);
+    // Pixel mascot (skull) tucked bottom-left above footer
+    sprites::draw (g, sprites::MASCOT, 29.0f, (float) getHeight() - 54.0f, 2.0f, P.bgDeep);
+    sprites::draw (g, sprites::MASCOT, 28.0f, (float) getHeight() - 55.0f, 2.0f, P.goldHi);
 
-    // ---- ⚡ Demonic eyes @ MAX DRIVE ----
-    drawDemonEyes (g, getWidth(), drive01, P, phase);
-
-    // ---- Title with chromatic aberration ----
-    drawChromaticTitle (g, "3PACK CLIP",
-                        juce::Rectangle<int> (0, 14, getWidth(), 46),
-                        42.0f, P, drive01);
+    // v5: Clean gold title (demon eyes / chromatic removed — kept master-class clean).
+    // Title descended a bit — more air at the top.
+    g.setColour (P.gold);
+    g.setFont (juce::Font (42.0f, juce::Font::bold));
+    g.drawFittedText ("3PACK CLIP", 0, 22, getWidth(), 46, juce::Justification::centred, 1);
 
     g.setColour (P.cream.withAlpha (0.85f));
     g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 11.0f, juce::Font::plain));
-    g.drawFittedText ("1017 DSP  .  INSERT COIN TO CLIP", 0, 62, getWidth(), 14,
+    g.drawFittedText ("1017 DSP  .  INSERT COIN TO CLIP", 0, 72, getWidth(), 14,
                       juce::Justification::centred, 1);
 
     // ---- COMBO indicator ----
     drawCombo (g, getWidth() / 2, 85, drive01, P, phase);
 
-    // ---- 🎵 FFT freq bars BEHIND scope ----
-    auto scopeBounds = juce::Rectangle<int> (30, 90, getWidth() - 130, 150);
-    drawFreqBars (g, scopeBounds, drive01, P, freqSeed, phase);
+    // v5: FFT freq bars removed (too busy). Scope stays clean.
+
+    // ---- 📊 v4.4: VU METERS flanking the scope ----
+    // Left side: IN L / IN R (between scope and left margin)
+    const float vuTop = 110.0f;
+    const float vuH   = 140.0f;
+    drawVuMeter (g, juce::Rectangle<float> (74.0f, vuTop, 9.0f, vuH),
+                 processorRef.inputRmsL.load(),  inPeakL,  P, "IL");
+    drawVuMeter (g, juce::Rectangle<float> (88.0f, vuTop, 9.0f, vuH),
+                 processorRef.inputRmsR.load(),  inPeakR,  P, "IR");
+    // Right side: OUT L / OUT R
+    const float rx = (float) getWidth() - 100.0f;
+    drawVuMeter (g, juce::Rectangle<float> (rx,        vuTop, 9.0f, vuH),
+                 processorRef.outputRmsL.load(), outPeakL, P, "OL");
+    drawVuMeter (g, juce::Rectangle<float> (rx + 14.0f, vuTop, 9.0f, vuH),
+                 processorRef.outputRmsR.load(), outPeakR, P, "OR");
+
+    // Clip LEDs: one above each VU column
+    drawClipLed (g, juce::Rectangle<float> (80.0f, 90.0f, 10.0f, 10.0f), clipLedFade, P);
+    drawClipLed (g, juce::Rectangle<float> (rx + 7.0f, 90.0f, 10.0f, 10.0f), clipLedFade, P);
 
     // ---- Output meter bar under scope ----
-    auto meterBar = juce::Rectangle<int> (30, 244, getWidth() - 130, 18);
+    auto meterBar = juce::Rectangle<int> (20, 266, getWidth() - 40, 18);
     g.setColour (P.bgDeep);
     g.fillRoundedRectangle (meterBar.toFloat(), 3.0f);
     const int outW = (int) ((float) meterBar.getWidth() * juce::jlimit (0.0f, 1.0f, outMeter));
@@ -477,32 +706,84 @@ void TrapHouseEditor::paint (juce::Graphics& g)
     g.setGradientFill (meter);
     g.fillRoundedRectangle (meterBar.withWidth (outW).toFloat(), 2.0f);
 
-    // ---- Knob labels ----
-    g.setColour (P.gold);
-    g.setFont (juce::Font (13.0f, juce::Font::bold));
-    const int knobSize = 150, knobY = 295;
-    const int avail = getWidth() - 120;
-    const int gap = (avail - 2 * knobSize) / 3;
-    g.drawText ("DRIVE",     gap,                knobY - 22, knobSize, 16, juce::Justification::centred);
-    g.drawText ("SUB GUARD", gap * 2 + knobSize, knobY - 22, knobSize, 16, juce::Justification::centred);
+    // v5 MASTER CLASS: knob at draggable position, no labels, with corona +
+    // orbital particles + ember stream visuals at high drive.
+    const float kcx = driveKnobX;
+    const float kcy = driveKnobY;
+    const float kSize = (float) driveKnobSize;
+    // driveHot already defined at the top of paint()
 
-    // ---- 🌟 Knob auras (below the slider component, above the bg) ----
-    const float subGuard = processorRef.getAPVTS().getRawParameterValue (th::PID::subGuard)->load();
-    drawKnobAura (g, gap + knobSize * 0.5f,                    knobY + knobSize * 0.5f,
-                  (float) knobSize, drive01, P, phase);
-    drawKnobAura (g, gap * 2 + knobSize + knobSize * 0.5f,     knobY + knobSize * 0.5f,
-                  (float) knobSize, subGuard, P, phase);
+    // Layer D: CORONA halo around knob (soft radial gradient)
+    if (driveHot > 0.15f)
+    {
+        const float pulse = 1.0f + 0.1f * std::sin (phase * 2.0f);
+        const float coronaR = kSize * (1.1f + driveHot * 0.5f) * pulse;
+        juce::ColourGradient corona (
+            P.gold.withAlpha (driveHot * 0.35f), kcx, kcy,
+            P.purpleHi.withAlpha (0.0f), kcx + coronaR, kcy, true);
+        corona.addColour (0.5, P.purpleHi.withAlpha (driveHot * 0.18f));
+        corona.addColour (0.8, P.purpleLean.withAlpha (driveHot * 0.10f));
+        g.setGradientFill (corona);
+        g.fillEllipse (kcx - coronaR, kcy - coronaR, coronaR * 2.0f, coronaR * 2.0f);
+    }
 
-    // ---- LED power bars under knobs ----
-    const float pbY = knobY + knobSize + 4.0f;
-    const float pbW = knobSize - 30.0f;
-    drawLedPowerBar (g, juce::Rectangle<float> (gap + (knobSize - pbW) / 2.0f, pbY, pbW, 8.0f), drive01, P);
-    drawLedPowerBar (g, juce::Rectangle<float> (gap * 2 + knobSize + (knobSize - pbW) / 2.0f, pbY, pbW, 8.0f),
-                     subGuard, P);
+    // Layer E: 8 ORBITAL PARTICLES around the knob (elliptical orbits, trails)
+    if (driveHot > 0.15f)
+    {
+        for (const auto& op : orbitParticles)
+        {
+            const float rx = kSize * (0.65f + driveHot * 0.3f);
+            const float ry = rx * op.elliptical;
+            const float size = 2.5f + driveHot * 2.0f + std::sin (phase * 3.0f + op.offset) * 1.0f;
+            // Main dot
+            const float x = kcx + std::cos (op.angle) * rx;
+            const float y = kcy + std::sin (op.angle) * ry * 0.7f;
+            g.setColour (P.goldHi.withAlpha (0.4f + driveHot * 0.4f));
+            g.fillEllipse (x - size, y - size, size * 2.0f, size * 2.0f);
+            // Trail dot 1
+            const float ta = op.angle - 0.2f;
+            g.setColour (P.purpleHi.withAlpha (0.25f * driveHot));
+            g.fillEllipse (kcx + std::cos (ta) * rx - size * 0.4f,
+                            kcy + std::sin (ta) * ry * 0.7f - size * 0.4f,
+                            size * 0.8f, size * 0.8f);
+            // Trail dot 2
+            const float tb = op.angle - 0.4f;
+            g.setColour (P.purpleLean.withAlpha (0.15f * driveHot));
+            g.fillEllipse (kcx + std::cos (tb) * rx - size * 0.25f,
+                            kcy + std::sin (tb) * ry * 0.7f - size * 0.25f,
+                            size * 0.5f, size * 0.5f);
+        }
+    }
 
-    // ---- Right side panel label ----
-    g.setFont (juce::Font (10.0f, juce::Font::bold));
-    g.drawText ("CHARACTER", getWidth() - 110, 98, 96, 14, juce::Justification::centred);
+    // Layer F: EMBER STREAM rising from the knob (particles that float up)
+    for (const auto& e : emberStream)
+    {
+        const float sz = e.size * e.life;
+        g.setColour (e.colour.withAlpha (e.life * 0.7f));
+        g.fillEllipse (e.x - sz, e.y - sz, sz * 2.0f, sz * 2.0f);
+    }
+
+    // ---- LED power bar centered under knob + GR meter ----
+    const float pbY = kcy + kSize * 0.5f + 6.0f;
+    const float pbW = kSize - 30.0f;
+    drawLedPowerBar (g, juce::Rectangle<float> (kcx - pbW * 0.5f, pbY, pbW, 8.0f), drive01, P);
+    drawGrMeter (g, juce::Rectangle<float> (kcx - (kSize - 20.0f) * 0.5f, pbY + 14.0f,
+                                              kSize - 20.0f, 10.0f),
+                 processorRef.gainReductionDb.load(), P);
+
+    // ---- 💫 v4.4: expanding GLOW RINGS (replaces screen shake at MAX DRIVE) ----
+    for (const auto& r : glowRings)
+    {
+        const float alpha = r.life * 0.45f;
+        const float strokeW = 2.0f + r.life * 5.0f;
+        g.setColour (r.colour.withAlpha (alpha));
+        g.drawEllipse (r.cx - r.radius, r.cy - r.radius,
+                       r.radius * 2.0f, r.radius * 2.0f, strokeW);
+        // Inner glow
+        g.setColour (r.colour.withAlpha (alpha * 0.4f));
+        g.drawEllipse (r.cx - r.radius * 0.88f, r.cy - r.radius * 0.88f,
+                       r.radius * 1.76f, r.radius * 1.76f, strokeW * 0.5f);
+    }
 
     // ---- ✨ Particles ----
     for (const auto& part : particles)
@@ -521,31 +802,114 @@ void TrapHouseEditor::paint (juce::Graphics& g)
     // ---- 📢 Level-up banner (stage transition) ----
     drawLevelUp (g, getWidth(), getHeight(), stageTransitionTimer, stageTransitionText, P);
 
-    // ---- ⚡ Lightning white flash overlay ----
-    if (lightningFlash > 0.01f)
+    // v5: Lightning flash removed (chaotic). Corona + orbital particles
+    // carry the MAX DRIVE energy instead.
+
+    // ---- 🔐 SECRET PANEL overlay (triggered by 3× click on title) ----
+    if (secretPanelAlpha > 0.01f)
     {
-        g.setColour (P.cream.withAlpha (lightningFlash * 0.25f));
+        // Dim background
+        g.setColour (juce::Colours::black.withAlpha (secretPanelAlpha * 0.55f));
         g.fillAll();
+
+        // Centered panel card
+        auto panel = juce::Rectangle<int> (getWidth() / 2 - 200, getHeight() / 2 - 110,
+                                            400, 220);
+        g.setColour (P.bgDeep.withAlpha (secretPanelAlpha * 0.95f));
+        g.fillRoundedRectangle (panel.toFloat(), 8.0f);
+        g.setColour (P.goldHi.withAlpha (secretPanelAlpha * 0.9f));
+        g.drawRoundedRectangle (panel.toFloat(), 8.0f, 2.0f);
+
+        // Title
+        g.setColour (P.goldHi.withAlpha (secretPanelAlpha));
+        g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 14.0f, juce::Font::bold));
+        g.drawText ("SECRET LAB",
+                    panel.withHeight (28).translated (0, 8),
+                    juce::Justification::centred, false);
+
+        g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 9.0f, juce::Font::plain));
+        g.setColour (P.cream.withAlpha (secretPanelAlpha * 0.7f));
+        g.drawText ("STEREO WIDTH       OUTPUT TRIM",
+                    panel.withY (panel.getY() + 150).withHeight (12),
+                    juce::Justification::centred, false);
+
+        // Hint text
+        g.setColour (P.cream.withAlpha (secretPanelAlpha * 0.5f));
+        g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 8.0f, juce::Font::plain));
+        g.drawText ("click title 3x to close",
+                    panel.withY (panel.getBottom() - 20).withHeight (14),
+                    juce::Justification::centred, false);
+
+        // Tip about ICE + easter eggs
+        g.setColour (P.goldHi.withAlpha (secretPanelAlpha * 0.8f));
+        g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 8.5f, juce::Font::bold));
+        g.drawText ("TIP: own a LABEL in TYCOON to unlock ICE character",
+                    panel.withY (panel.getY() + 36).withHeight (14),
+                    juce::Justification::centred, false);
     }
 }
 
 void TrapHouseEditor::resized()
 {
-    presetBox.setBounds (getWidth() - 110, 22, 92, 26);
-    scope.setBounds (30, 90, getWidth() - 130, 150);
-    characterBox.setBounds (getWidth() - 108, 116, 96, 26);
-    autoGainBtn .setBounds (getWidth() - 110, 158, 104, 22);
-    bypassBtn   .setBounds (getWidth() - 110, 186, 104, 22);
+    // v4.3 layout — 960×560 window, cadré & aligned.
+    // Top-right compact panel hosts PRESET + CHARACTER + AUTO GAIN + BYPASS.
+    const int W = getWidth();
 
-    const int knobSize = 150, knobY = 295;
-    const int available = getWidth() - 120;
-    const int gap = (available - 2 * knobSize) / 3;
-    driveKnob   .setBounds (gap,                knobY, knobSize, knobSize);
-    subGuardKnob.setBounds (gap * 2 + knobSize, knobY, knobSize, knobSize);
+    // Top-right 2×2 grid (starts at x=720, 4 controls in 2 rows of 2)
+    presetBox   .setBounds (W - 240, 20, 110, 26);
+    characterBox.setBounds (W - 120, 20, 110, 26);
+    autoGainBtn .setBounds (W - 240, 52, 110, 22);
+    bypassBtn   .setBounds (W - 120, 52, 110, 22);
 
-    // 🎮 Tycoon game — bottom-right corner, 230×185 px.
-    // Fits between the side panel (top) and footer (bottom), right of subGuard knob.
-    tycoon.setBounds (getWidth() - 236, getHeight() - 210, 230, 185);
+    // Scope leaves room on left/right for VU meters
+    scope.setBounds (110, 100, W - 220, 160);
+
+    // v5 MASTER CLASS: knob + tycoon use draggable positions from state
+    const int ks = driveKnobSize;
+    driveKnob   .setBounds ((int) driveKnobX - ks/2, (int) driveKnobY - ks/2, ks, ks);
+    subGuardKnob.setBounds (-1000, -1000, 10, 10); // hidden offscreen
+
+    // 🎮 TYCOON v2 — draggable, default 470×200
+    tycoon.setBounds ((int) tycoonX, (int) tycoonY, tycoonW, tycoonH);
+
+    // 🔐 Secret panel sliders (shown when secretPanelVisible)
+    // Positioned in the center overlay card
+    const int cx = getWidth() / 2;
+    const int cy = getHeight() / 2;
+    stereoWidthKnob.setBounds (cx - 150, cy - 50, 100, 100);
+    outputTrimKnob .setBounds (cx + 50,  cy - 50, 100, 100);
+}
+
+void TrapHouseEditor::mouseDown (const juce::MouseEvent& e)
+{
+    // 🔐 Click the title area 3× within 1.5 s to toggle the secret panel.
+    const juce::Rectangle<int> titleArea (getWidth() / 2 - 200, 14, 400, 50);
+    if (titleArea.contains (e.getPosition()))
+    {
+        const int64_t now = juce::Time::currentTimeMillis();
+        if (now - lastLogoClickMs < 1500)
+            ++logoClickCount;
+        else
+            logoClickCount = 1;
+        lastLogoClickMs = now;
+
+        if (logoClickCount >= 3)
+        {
+            secretPanelVisible = ! secretPanelVisible;
+            logoClickCount = 0;
+            stereoWidthKnob.setVisible (secretPanelVisible);
+            outputTrimKnob .setVisible (secretPanelVisible);
+        }
+    }
+
+    // Easter egg: click the mascot (x=28-52, y~=bottom-55..bottom-29)
+    const juce::Rectangle<int> mascotArea (26, getHeight() - 57, 26, 26);
+    if (mascotArea.contains (e.getPosition()))
+    {
+        // Trigger a small floating message near the mascot
+        stageTransitionTimer = 45;
+        stageTransitionText  = "GUWOP!!!";
+    }
 }
 
 void TrapHouseEditor::timerCallback()

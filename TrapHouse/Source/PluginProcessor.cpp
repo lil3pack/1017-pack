@@ -37,13 +37,31 @@ APVTS::ParameterLayout TrapHouseProcessor::createLayout()
 
     params.push_back (std::make_unique<AudioParameterChoice> (
         ParameterID { th::PID::character, 1 }, "Character",
-        StringArray { "HARD", "TAPE", "TUBE" }, 0)); // HARD default — most aggressive maximizer vibe
+        StringArray { "HARD", "TAPE", "TUBE", "ICE" }, 0));
+        // HARD default — most aggressive maximizer.
+        // ICE (idx 3) is unlocked by owning a LABEL in 1017 TYCOON; otherwise
+        // falls back to HARD in processBlock.
 
     params.push_back (std::make_unique<AudioParameterBool> (
         ParameterID { th::PID::autoGain, 1 }, "Auto Gain", false /* v4.2: OFF by default — user can enable manually */));
 
     params.push_back (std::make_unique<AudioParameterBool> (
         ParameterID { th::PID::bypass, 1 }, "Bypass", false));
+
+    // v4.4 secret panel params
+    params.push_back (std::make_unique<AudioParameterFloat> (
+        ParameterID { th::PID::stereoWidth, 1 }, "Stereo Width",
+        NormalisableRange<float> (0.0f, 2.0f, 0.01f), 1.0f,
+        AudioParameterFloatAttributes().withStringFromValueFunction (
+            [] (float v, int) { return juce::String ((int) std::round (v * 100.0f)) + "%"; })));
+
+    params.push_back (std::make_unique<AudioParameterFloat> (
+        ParameterID { th::PID::outputTrim, 1 }, "Output Trim",
+        NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f,
+        AudioParameterFloatAttributes()
+            .withLabel ("dB")
+            .withStringFromValueFunction (
+                [] (float v, int) { return juce::String (v, 1) + " dB"; })));
 
     return { params.begin(), params.end() };
 }
@@ -127,8 +145,14 @@ void TrapHouseProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const float subGuard = juce::jlimit (0.0f, 1.0f,
         apvts.getRawParameterValue (th::PID::subGuard)->load());
 
-    const int  charIdx = (int) apvts.getRawParameterValue (th::PID::character)->load();
+    int  charIdx       = (int) apvts.getRawParameterValue (th::PID::character)->load();
     const bool autoG   = apvts.getRawParameterValue (th::PID::autoGain)->load() > 0.5f;
+
+    // 🎮 ICE character gate: requires owning ≥1 LABEL in 1017 TYCOON.
+    // If locked, silently fall back to HARD so the plugin never fails,
+    // and the user sees a visual "locked" indicator in the UI instead.
+    if (charIdx == 3 && ! isIceUnlocked())
+        charIdx = 0;
 
     clipper.setInputGainDb (inGainDb);
     clipper.setCeilingDb   (ceilDb);
@@ -136,29 +160,77 @@ void TrapHouseProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     clipper.setHarmonics   (harm);
     clipper.setShelfAmount (shelf);
     clipper.setSubGuard    (subGuard);
-    clipper.setCharacter   (static_cast<th::dsp::ClipperCore::Character> (juce::jlimit (0, 2, charIdx)));
+    clipper.setCharacter   (static_cast<th::dsp::ClipperCore::Character> (juce::jlimit (0, 3, charIdx)));
     clipper.setAutoGain    (autoG);
 
-    // Input RMS for the meter
-    float inSum = 0.0f;
+    // v4.4: per-channel + mono RMS for VU meters
     const int n = buffer.getNumSamples();
-    for (int ch = 0; ch < totalIn; ++ch)
+    auto computeRms = [n] (const float* d)
     {
-        const auto* d = buffer.getReadPointer (ch);
-        for (int i = 0; i < n; ++i) inSum += d[i] * d[i];
-    }
-    inputRms.store (std::sqrt (inSum / juce::jmax (1, n * totalIn)));
+        float s = 0.0f;
+        for (int i = 0; i < n; ++i) s += d[i] * d[i];
+        return std::sqrt (s / (float) juce::jmax (1, n));
+    };
+
+    const float inL = (totalIn > 0) ? computeRms (buffer.getReadPointer (0)) : 0.0f;
+    const float inR = (totalIn > 1) ? computeRms (buffer.getReadPointer (1)) : inL;
+    inputRmsL.store (inL);
+    inputRmsR.store (inR);
+    inputRms .store (0.5f * (inL + inR));
 
     clipper.process (buffer);
 
-    // Output RMS + feed scope buffer (mono mixdown of output)
-    float outSum = 0.0f;
+    // v4.4: stereo width (M/S processing) — from secret panel
+    const float stereoW = apvts.getRawParameterValue (th::PID::stereoWidth)->load();
+    if (totalOut >= 2 && std::abs (stereoW - 1.0f) > 1.0e-3f)
+    {
+        auto* l = buffer.getWritePointer (0);
+        auto* r = buffer.getWritePointer (1);
+        for (int i = 0; i < n; ++i)
+        {
+            const float mid  = 0.5f * (l[i] + r[i]);
+            const float side = 0.5f * (l[i] - r[i]) * stereoW;
+            l[i] = mid + side;
+            r[i] = mid - side;
+        }
+    }
+
+    // v4.4: output trim — from secret panel
+    const float trimDb = apvts.getRawParameterValue (th::PID::outputTrim)->load();
+    if (std::abs (trimDb) > 1.0e-3f)
+    {
+        const float trim = juce::Decibels::decibelsToGain (trimDb);
+        for (int ch = 0; ch < totalOut; ++ch)
+        {
+            auto* d = buffer.getWritePointer (ch);
+            for (int i = 0; i < n; ++i) d[i] *= trim;
+        }
+    }
+
+    // Output RMS + clip detection (v4.4)
+    const float outL = (totalOut > 0) ? computeRms (buffer.getReadPointer (0)) : 0.0f;
+    const float outR = (totalOut > 1) ? computeRms (buffer.getReadPointer (1)) : outL;
+    outputRmsL.store (outL);
+    outputRmsR.store (outR);
+    outputRms .store (0.5f * (outL + outR));
+
+    // Clip event: any sample >= ceiling - epsilon flags a clip for UI LED
+    const float ceilingLin = juce::Decibels::decibelsToGain (-1.0f);
     for (int ch = 0; ch < totalOut; ++ch)
     {
         const auto* d = buffer.getReadPointer (ch);
-        for (int i = 0; i < n; ++i) outSum += d[i] * d[i];
+        for (int i = 0; i < n; ++i)
+        {
+            if (std::abs (d[i]) >= ceilingLin * 0.98f)
+            {
+                clipEventFlag.store (true);
+                break;
+            }
+        }
     }
-    outputRms.store (std::sqrt (outSum / juce::jmax (1, n * totalOut)));
+
+    // GR display: computed from autogain + TP limiter (approx)
+    gainReductionDb.store (juce::Decibels::gainToDecibels (clipper.getCurrentGainReduction(), -60.0f));
 
     if (totalOut > 0)
     {

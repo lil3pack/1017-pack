@@ -19,6 +19,16 @@ struct Particle
     juce::Colour colour { juce::Colours::gold };
 };
 
+// v4.4: expanding glow ring (replaces the old screen-shake visual)
+struct GlowRing
+{
+    float cx, cy;
+    float radius   { 10.0f };
+    float maxRadius { 200.0f };
+    float life      { 1.0f };
+    juce::Colour colour { juce::Colours::gold };
+};
+
 class TrapHouseEditor : public juce::AudioProcessorEditor,
                         private juce::Timer
 {
@@ -28,6 +38,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent&) override; // v4.4 — secret panel trigger
 
 private:
     void timerCallback() override;
@@ -36,9 +47,24 @@ private:
     TrapHouseProcessor& processorRef;
     LookAndFeel1017 lookAndFeel;
 
-    // Controls — macro DRIVE + SUB GUARD
+    // v5: macro DRIVE knob only. SUB GUARD still in APVTS for backward compat
+    // but no longer shown in the UI (user can still automate it if they want).
     juce::Slider driveKnob, subGuardKnob;
     juce::ComboBox characterBox, presetBox;
+
+    // v5 MASTER CLASS: draggable positions for DRIVE knob + TYCOON
+    float driveKnobX { 240.0f };
+    float driveKnobY { 380.0f };
+    int   driveKnobSize { 180 };
+    float tycoonX { 470.0f };
+    float tycoonY { 300.0f };
+    int   tycoonW { 470 };
+    int   tycoonH { 200 };
+
+    // Drag state
+    enum class DragTarget { None, Knob, Tycoon };
+    DragTarget dragTarget { DragTarget::None };
+    juce::Point<float> dragOffset;
     juce::ToggleButton autoGainBtn { "AUTO GAIN" };
     juce::ToggleButton bypassBtn   { "BYPASS" };
 
@@ -60,8 +86,9 @@ private:
 
     // --- 🔥 Transformation animation state ---
     std::vector<Particle> particles;           // sparks / clip bursts
-    float screenShakeX   { 0.0f };
-    float screenShakeY   { 0.0f };
+    std::vector<GlowRing> glowRings;           // v4.4: replaces screen shake
+    float screenShakeX { 0.0f };               // retained for compat but unused in v4.4
+    float screenShakeY { 0.0f };
     float lightningFlash { 0.0f };             // 0..1, decays each frame
     int   stageTransitionTimer { 0 };          // frames remaining for level-up banner
     juce::String stageTransitionText;
@@ -69,8 +96,32 @@ private:
     std::array<float, 32> freqSeed;            // pseudo-rand seeds for FFT bars
     juce::Random rng;
 
+    // v4.4: VU meter peak-hold + clip LED state
+    float inPeakL  { 0.0f }, inPeakR  { 0.0f };
+    float outPeakL { 0.0f }, outPeakR { 0.0f };
+    float clipLedFade { 0.0f }; // flashes on clip event, decays
+
+    // v4.4: secret panel state (click title 3× to toggle)
+    bool    secretPanelVisible { false };
+    int     logoClickCount     { 0 };
+    int64_t lastLogoClickMs    { 0 };
+    float   secretPanelAlpha   { 0.0f }; // animates open/close
+
+    // Secret panel controls (only shown when secretPanelVisible)
+    juce::Slider stereoWidthKnob;
+    juce::Slider outputTrimKnob;
+    std::unique_ptr<APVTS::SliderAttachment> stereoWidthAtt;
+    std::unique_ptr<APVTS::SliderAttachment> outputTrimAtt;
+
     void updateAnimation();                    // advance state (called from timer)
     void spawnSparks (float kcxA, float kcxB, float kcy);
+
+    // v5 MASTER CLASS animation state
+    struct OrbitParticle { float angle; float speed; float elliptical; float offset; };
+    std::array<OrbitParticle, 8> orbitParticles;
+    std::vector<Particle> emberStream;         // ember particles rising from knob
+    float frameFlowPhase { 0.0f };              // 0-1 traveling around the frame
+    // drag support deferred — position state defaults match v5 preview layout
 
     // 🎮 Tycoon state sync counter (every 30 ticks = ~1 s)
     int tycoonSaveCounter { 0 };

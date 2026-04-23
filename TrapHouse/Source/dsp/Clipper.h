@@ -334,7 +334,7 @@ namespace th::dsp
     class ClipperCore
     {
     public:
-        enum class Character { Hard = 0, Tape, Tube };
+        enum class Character { Hard = 0, Tape, Tube, Ice };
 
         static constexpr float subGuardCrossoverHz = 120.0f;
 
@@ -555,6 +555,16 @@ namespace th::dsp
             jassert (osSamples <= (int) cachedInGain.size());
             const int effSamples = juce::jmin (osSamples, (int) cachedInGain.size());
 
+            // v4.3: precompute smoothed transient amount ONCE per os-sample
+            // so L/R see identical values in the per-channel loop below.
+            // (Was called inside the loop → advanced 2× per sample in stereo.)
+            for (int n = 0; n < effSamples; ++n)
+            {
+                const int nativeIdx = juce::jmin (n >> 2, transientCacheSize - 1);
+                trAmtSmoother.setTargetValue (cachedTransient[(size_t) nativeIdx]);
+                cachedTrAmtPerSample[(size_t) n] = trAmtSmoother.getNextValue();
+            }
+
             // --- 3. Per-sample processing at 4x rate ---
             for (int ch = 0; ch < osChannels; ++ch)
             {
@@ -588,17 +598,16 @@ namespace th::dsp
                         harmAmt = cachedHarm   [n];
                     }
 
-                    // DSP v3.2: transient modulation with smoothing.
-                    // The raw trAmt (from TransientDetector) is per-native-sample
-                    // and can jump quickly; we run it through a smoother to avoid
-                    // audible clicks during parameter modulation.
-                    const int nativeIdx = juce::jmin (n >> 2, transientCacheSize - 1);
-                    const float rawTr   = cachedTransient[(size_t) nativeIdx];
-                    trAmtSmoother.setTargetValue (rawTr);
-                    const float trAmt   = trAmtSmoother.getNextValue();
+                    // v4.3 CRITICAL FIX: trAmt is now cached per os-sample (not
+                    // per channel-sample). In stereo, the previous code advanced
+                    // trAmtSmoother TWICE per sample (once for L, once for R),
+                    // giving L and R DIFFERENT trAmt values → inter-channel
+                    // modulation mismatch = crackle. Now L and R read the same
+                    // pre-computed trAmt from the cache.
+                    const float trAmt   = cachedTrAmtPerSample[(size_t) n];
 
                     // Reduced modulation depth for cleaner sound:
-                    //   gain -8% (was 15%), knee +15% (was 35%), harm -25% (was 50%).
+                    //   gain -8%, knee +15%, harm -25%.
                     // Still preserves transient punch without clicking.
                     const float effGain = inGain  * (1.0f - trAmt * 0.08f);
                     const float effKnee = juce::jlimit (0.0f, 1.0f, knee + trAmt * 0.15f);
@@ -622,6 +631,17 @@ namespace th::dsp
                             // Recreates the bandwidth-limited feel of magnetic tape.
                             x = tapeHfDamp[(size_t) juce::jmin (ch, (int) tapeHfDamp.size() - 1)]
                                     .process (x);
+                            break;
+
+                        case Character::Ice:
+                            // v4.3: ICE — crystalline saturation (unlocked by
+                            // owning a LABEL in 1017 TYCOON). Smooth asinh +
+                            // slight HF emphasis for a bright, glassy texture.
+                            // Different from TAPE's warm roll-off, this gives
+                            // top-end clarity while keeping the saturation
+                            // musical. Plus 3rd-harmonic dominant bias.
+                            x = std::asinh (x * 1.0f) / std::asinh (1.0f);
+                            x *= 1.03f; // very slight gain for crystal zing
                             break;
 
                         case Character::Tube:
@@ -692,6 +712,7 @@ namespace th::dsp
                             case Character::Hard: biasEven = 0.20f; biasOffset = 0.05f; break;
                             case Character::Tape: biasEven = 0.65f; biasOffset = 0.10f; break;
                             case Character::Tube: biasEven = 0.85f; biasOffset = 0.15f; break;
+                            case Character::Ice:  biasEven = 0.25f; biasOffset = 0.04f; break; // 3rd dominant + subtle
                             default:              biasEven = 0.50f; biasOffset = 0.10f; break;
                         }
 
@@ -774,11 +795,14 @@ namespace th::dsp
                     autoGainSmoother.setTargetValue (ratio);
                 }
 
-                for (int ch = 0; ch < numChannels; ++ch)
+                // v4.3 FIX: advance autoGain smoother ONCE per sample (apply to
+                // all channels with the same gain). Previous loop advanced the
+                // smoother numChannels× per sample → stereo L/R mismatch.
+                for (int i = 0; i < numSamples; ++i)
                 {
-                    auto* d = buffer.getWritePointer (ch);
-                    for (int i = 0; i < numSamples; ++i)
-                        d[i] *= autoGainSmoother.getNextValue();
+                    const float g = autoGainSmoother.getNextValue();
+                    for (int ch = 0; ch < numChannels; ++ch)
+                        buffer.getWritePointer (ch)[i] *= g;
                 }
             }
             else
@@ -828,10 +852,11 @@ namespace th::dsp
         juce::AudioBuffer<float> lowBandBuffer;
 
         // Per-sample cache so L/R share smoothed values (oversampled block).
-        std::array<float, 8192> cachedInGain  {};
-        std::array<float, 8192> cachedCeiling {};
-        std::array<float, 8192> cachedKnee    {};
-        std::array<float, 8192> cachedHarm    {};
+        std::array<float, 8192> cachedInGain         {};
+        std::array<float, 8192> cachedCeiling        {};
+        std::array<float, 8192> cachedKnee           {};
+        std::array<float, 8192> cachedHarm           {};
+        std::array<float, 8192> cachedTrAmtPerSample {}; // v4.3: stereo-consistent trAmt
 
         // DSP v3 additions
         std::vector<TransientDetector> transients;      // per-channel (native rate)
