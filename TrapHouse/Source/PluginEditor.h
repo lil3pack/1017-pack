@@ -110,8 +110,8 @@ private:
     // Secret panel controls (only shown when secretPanelVisible)
     juce::Slider stereoWidthKnob;
     juce::Slider outputTrimKnob;
-    std::unique_ptr<APVTS::SliderAttachment> stereoWidthAtt;
-    std::unique_ptr<APVTS::SliderAttachment> outputTrimAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> stereoWidthAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputTrimAtt;
 
     void updateAnimation();                    // advance state (called from timer)
     void spawnSparks (float kcxA, float kcxB, float kcy);

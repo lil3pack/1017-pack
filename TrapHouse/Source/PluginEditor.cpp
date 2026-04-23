@@ -732,25 +732,25 @@ void TrapHouseEditor::paint (juce::Graphics& g)
     {
         for (const auto& op : orbitParticles)
         {
-            const float rx = kSize * (0.65f + driveHot * 0.3f);
-            const float ry = rx * op.elliptical;
+            const float orbitRx = kSize * (0.65f + driveHot * 0.3f);
+            const float orbitRy = orbitRx * op.elliptical;
             const float size = 2.5f + driveHot * 2.0f + std::sin (phase * 3.0f + op.offset) * 1.0f;
             // Main dot
-            const float x = kcx + std::cos (op.angle) * rx;
-            const float y = kcy + std::sin (op.angle) * ry * 0.7f;
+            const float x = kcx + std::cos (op.angle) * orbitRx;
+            const float y = kcy + std::sin (op.angle) * orbitRy * 0.7f;
             g.setColour (P.goldHi.withAlpha (0.4f + driveHot * 0.4f));
             g.fillEllipse (x - size, y - size, size * 2.0f, size * 2.0f);
             // Trail dot 1
             const float ta = op.angle - 0.2f;
             g.setColour (P.purpleHi.withAlpha (0.25f * driveHot));
-            g.fillEllipse (kcx + std::cos (ta) * rx - size * 0.4f,
-                            kcy + std::sin (ta) * ry * 0.7f - size * 0.4f,
+            g.fillEllipse (kcx + std::cos (ta) * orbitRx - size * 0.4f,
+                            kcy + std::sin (ta) * orbitRy * 0.7f - size * 0.4f,
                             size * 0.8f, size * 0.8f);
             // Trail dot 2
             const float tb = op.angle - 0.4f;
             g.setColour (P.purpleLean.withAlpha (0.15f * driveHot));
-            g.fillEllipse (kcx + std::cos (tb) * rx - size * 0.25f,
-                            kcy + std::sin (tb) * ry * 0.7f - size * 0.25f,
+            g.fillEllipse (kcx + std::cos (tb) * orbitRx - size * 0.25f,
+                            kcy + std::sin (tb) * orbitRy * 0.7f - size * 0.25f,
                             size * 0.5f, size * 0.5f);
         }
     }

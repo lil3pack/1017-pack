@@ -570,7 +570,6 @@ namespace th::dsp
             {
                 auto* d = osBlock.getChannelPointer ((size_t) ch);
                 auto& st = adaaState[(size_t) juce::jmin (ch, (int) adaaState.size() - 1)];
-                auto& dc = dcBlocker[(size_t) juce::jmin (ch, (int) dcBlocker.size() - 1)];
 
                 const bool primaryChannel = (ch == 0);
 
