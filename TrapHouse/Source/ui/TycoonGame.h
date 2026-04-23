@@ -357,12 +357,13 @@ namespace th::game
     struct Runner
     {
         enum class Kind { DeliveryBoy, Fan, Artist, CopCar };
-        Kind   kind;
-        float  x, y;
-        float  vx;
-        float  life;       // time-left scalar 0..1
-        double reward;     // cash reward on click
-        int    artistIdx;  // valid for Artist kind
+        Kind   kind      { Kind::Fan };
+        float  x         { 0.0f };
+        float  y         { 0.0f };
+        float  vx        { 0.0f };
+        float  life      { 1.0f };   // time-left scalar 0..1
+        double reward    { 0.0 };    // cash reward on click
+        int    artistIdx { 0 };      // valid for Artist kind
     };
 
     //==========================================================================
@@ -370,9 +371,11 @@ namespace th::game
     //==========================================================================
     struct Car
     {
-        float x, y, vx;
-        juce::Colour colour;
-        bool  hasHeadlights;
+        float x             { 0.0f };
+        float y             { 0.0f };
+        float vx            { 0.0f };
+        juce::Colour colour { juce::Colours::white };
+        bool  hasHeadlights { false };
     };
 
     //==========================================================================
@@ -501,10 +504,8 @@ namespace th::game
         float   beatPulse         { 1.0f };    // trap house pulse on click
         float   moneyFlash        { 0.0f };
         int     offlineBannerTimer  { 0 };
-        double  offlineBannerAmount { 0.0 };
-        int64_t lastTickMs { 0 };
+        double  offlineBannerAmount { 0.0 };        int64_t lastTickMs { 0 };
         int64_t cycleStartMs { 0 };
-        int     framesSinceEvent  { 0 };
         int     framesSinceRunner { 0 };
         int     framesSinceMission { 0 };
 
@@ -915,7 +916,7 @@ namespace th::game
             const uint32_t bit = (1u << idx);
             if (state.achievementMask & bit) return;
             state.achievementMask |= bit;
-            toastText = juce::String ("🏆 ") + getAchievements()[(size_t) idx].name;
+            toastText = juce::String ("* ") + getAchievements()[(size_t) idx].name;
             toastTimer = 120;
             // Small flat bonus per tier
             const int tier = getAchievements()[(size_t) idx].tier;
@@ -1594,7 +1595,6 @@ namespace th::game
             const auto  r = artistRects[(size_t) idx];
             const auto& a = getArtists()[(size_t) idx];
             const bool  signed_ = (state.signedArtistMask & (1u << idx)) != 0;
-            const bool  avail   = state.isArtistAvailable (idx);
             const bool  unlocked = state.totalEarned >= a.unlockStreams;
             const bool  affordable = unlocked && state.money >= a.signingFee;
 
@@ -1710,7 +1710,7 @@ namespace th::game
                 if (have)
                 {
                     g.setColour (juce::Colour (0xFF0A1000));
-                    g.drawText ("★", juce::Rectangle<int> (bx, achR.getY(), 10, 10),
+                    g.drawText ("*", juce::Rectangle<int> (bx, achR.getY(), 10, 10),
                                 juce::Justification::centred);
                 }
             }
