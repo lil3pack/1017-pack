@@ -59,6 +59,9 @@ public:
     // Oscilloscope data (post-clipping)
     th::dsp::ScopeBuffer scopeBuffer;
 
+    // 🎮 1017 TYCOON persistent game state (survives plugin close/reopen)
+    juce::ValueTree tycoonState { "TycoonState" };
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 

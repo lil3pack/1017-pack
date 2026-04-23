@@ -176,14 +176,41 @@ juce::AudioProcessorEditor* TrapHouseProcessor::createEditor()
 
 void TrapHouseProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
-    if (auto xml = apvts.copyState().createXml())
+    // Wrap APVTS state + tycoon state in a single XML root so both
+    // round-trip through the DAW session save cycle.
+    juce::ValueTree root ("3PackClipState");
+    root.appendChild (apvts.copyState(), nullptr);
+    if (tycoonState.isValid())
+        root.appendChild (tycoonState.createCopy(), nullptr);
+
+    if (auto xml = root.createXml())
         copyXmlToBinary (*xml, dest);
 }
 
 void TrapHouseProcessor::setStateInformation (const void* data, int size)
 {
-    if (auto xml = getXmlFromBinary (data, size))
-        apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    auto xml = getXmlFromBinary (data, size);
+    if (! xml) return;
+
+    auto root = juce::ValueTree::fromXml (*xml);
+    if (! root.isValid()) return;
+
+    // Support legacy saves (APVTS XML at root) + new wrapper format
+    if (root.hasType ("3PackClipState"))
+    {
+        auto apvtsVT  = root.getChildWithName (apvts.state.getType());
+        if (apvtsVT.isValid())
+            apvts.replaceState (apvtsVT);
+
+        auto tyVT = root.getChildWithName ("TycoonState");
+        if (tyVT.isValid())
+            tycoonState = tyVT.createCopy();
+    }
+    else
+    {
+        // Legacy: whole thing was just the APVTS
+        apvts.replaceState (root);
+    }
 }
 
 // --- JUCE entry point ---

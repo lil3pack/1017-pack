@@ -7,6 +7,7 @@
 #include "PluginProcessor.h"
 #include "LookAndFeel1017.h"
 #include "ui/ScopeDisplay.h"
+#include "ui/TycoonGame.h"
 
 // Particle struct for the knob/clip spark system
 struct Particle
@@ -44,6 +45,13 @@ private:
     // Oscilloscope
     th::ui::ScopeDisplay scope;
 
+    // 🎮 1017 TYCOON — pixel art trap tycoon mini-game
+    th::game::TycoonGame tycoon;
+
+public:
+    th::game::TycoonGame& getTycoon() { return tycoon; }
+private:
+
     // Meters
     float outMeter { 0.0f };
 
@@ -63,6 +71,9 @@ private:
 
     void updateAnimation();                    // advance state (called from timer)
     void spawnSparks (float kcxA, float kcxB, float kcy);
+
+    // 🎮 Tycoon state sync counter (every 30 ticks = ~1 s)
+    int tycoonSaveCounter { 0 };
 
     using APVTS = juce::AudioProcessorValueTreeState;
     std::unique_ptr<APVTS::SliderAttachment>   driveAtt, subGuardAtt;

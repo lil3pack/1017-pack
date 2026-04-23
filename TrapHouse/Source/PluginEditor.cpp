@@ -276,6 +276,10 @@ TrapHouseEditor::TrapHouseEditor (TrapHouseProcessor& p)
 
     addAndMakeVisible (scope);
 
+    // 🎮 Tycoon game — load saved state from processor's tycoonState ValueTree
+    tycoon.loadSaveState (p.tycoonState);
+    addAndMakeVisible (tycoon);
+
     setupKnob (driveKnob);
     setupKnob (subGuardKnob);
     driveKnob   .setDoubleClickReturnValue (true, 0.35);
@@ -307,6 +311,8 @@ TrapHouseEditor::TrapHouseEditor (TrapHouseProcessor& p)
 TrapHouseEditor::~TrapHouseEditor()
 {
     stopTimer();
+    // 🎮 Save tycoon game state back to processor (persists across editor reopens)
+    processorRef.tycoonState = tycoon.getSaveState();
     setLookAndFeel (nullptr);
 }
 
@@ -536,12 +542,28 @@ void TrapHouseEditor::resized()
     const int gap = (available - 2 * knobSize) / 3;
     driveKnob   .setBounds (gap,                knobY, knobSize, knobSize);
     subGuardKnob.setBounds (gap * 2 + knobSize, knobY, knobSize, knobSize);
+
+    // 🎮 Tycoon game — bottom-right corner, 230×185 px.
+    // Fits between the side panel (top) and footer (bottom), right of subGuard knob.
+    tycoon.setBounds (getWidth() - 236, getHeight() - 210, 230, 185);
 }
 
 void TrapHouseEditor::timerCallback()
 {
     outMeter = juce::jmax (outMeter * 0.88f, processorRef.outputRms.load());
     scope.setCeilingGain (juce::Decibels::decibelsToGain (-1.0f));  // matches new ceiling default
+
+    // 🎮 Feed audio RMS to tycoon (click bonus when audio is flowing)
+    tycoon.setAudioActivity (processorRef.outputRms.load() * 3.0f);
+
+    // 🎮 Periodically sync tycoon state back to processor (once per second).
+    // Ensures DAW session saves capture the latest game progress.
+    if (++tycoonSaveCounter >= 30)
+    {
+        tycoonSaveCounter = 0;
+        processorRef.tycoonState = tycoon.getSaveState();
+    }
+
     updateAnimation();
     repaint();
 }
