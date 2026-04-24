@@ -183,19 +183,29 @@ namespace th::game
         float       incomeMulDeltaB;
     };
 
-    inline const std::array<EventDef, 10>& getEvents()
+    inline const std::array<EventDef, 20>& getEvents()
     {
-        static const std::array<EventDef, 10> E = {{
+        static const std::array<EventDef, 20> E = {{
             { "Major label offer",      "Sign",          "Stay indie",   5000, 0,   -0.10f, 0.00f },
             { "Opp beefing on IG",      "Respond",       "Ignore",      -500,  0,    0.10f, 0.00f },
             { "Tour invite",            "Book",          "Pass",         0,    200,  0.20f, 0.00f },
-            { "Crypto tip",             "Invest 1K",     "Pass",        -1000,0,    0.00f, 0.00f },
+            { "Crypto tip",             "Invest 1K",     "Pass",        -1000,0,    0.15f, 0.00f },
             { "Manager wants cut",      "Give 10%",      "Fire",         -500, 0,    0.05f, -0.05f },
             { "Viral TikTok",           "Ride the wave", "Cash out",     0,    2000, 0.30f, 0.00f },
             { "Ghost writer offer",     "Pay $2K",       "Decline",     -2000, 0,    0.15f, 0.00f },
             { "Radio payola",           "Pay $1K",       "Decline",     -1000, 0,    0.10f, 0.00f },
             { "Studio fire",            "Rebuild",       "Claim insur.", -1500, 3000, 0.00f, -0.05f },
             { "Award nomination",       "Campaign",      "Organic",     -500,  0,    0.12f, 0.05f },
+            { "Feature request",        "Drop verse",    "Ghost them",  -250,  0,    0.15f, -0.05f },
+            { "Tax man at the door",    "Pay $3K",       "Hide",        -3000, -1000, 0.00f, -0.15f },
+            { "Mystery USB drive",      "Plug in",       "Toss",         0,    0,   -0.20f, 0.00f },
+            { "Hacker DMs you",         "Buy silence",   "Expose",      -2000, 500,  0.00f, 0.05f },
+            { "Pop-up shop invite",     "Rent booth",    "Decline",     -800,  0,    0.18f, 0.00f },
+            { "Documentary crew",       "Let in",        "No cameras",  -300,  0,    0.25f, 0.00f },
+            { "Rookie wants mentor",    "Teach",         "Charge fee",   0,    500, -0.05f, 0.10f },
+            { "Police investigation",   "Lawyer up",     "Talk yourself",-2500,-5000, 0.00f, -0.20f },
+            { "Limited drop hype",      "Release",       "Hold back",    1500, 0,    0.22f, 0.00f },
+            { "Brand sponsor offer",    "Sign deal",     "Keep free",    4000, 0,   -0.08f, 0.10f },
         }};
         return E;
     }
@@ -226,6 +236,57 @@ namespace th::game
     }
 
     //==========================================================================
+    // v6.5 — Quests (random side-objectives rolled at run start)
+    //==========================================================================
+    struct QuestDef
+    {
+        const char* name;
+        const char* desc;
+        int  kind;          // 0=buildCount 1=killCount 2=earnAmount 3=surviveSec 4=abilityUses
+        int  target;
+        int  rewardCash;
+        int  rewardLegend;
+        BType targetType;   // used by kinds 0, 4 (otherwise ignored)
+    };
+
+    // v6.6 — permanent perks bought between runs with Legend Points
+    struct PerkDef
+    {
+        const char* name;
+        const char* desc;
+        int cost;
+    };
+    inline const std::array<PerkDef, 6>& getPerks()
+    {
+        static const std::array<PerkDef, 6> P = {{
+            { "SIDE HUSTLE",     "+$500 at the start of every run",  10 },
+            { "LABEL CONNECTS",  "+10% income permanent",            25 },
+            { "WHOLESALE",       "-15% build costs",                 20 },
+            { "FORTIFIED",       "+50 empire max HP",                15 },
+            { "CRYPTO KING",     "+20% cash from opp kills",         30 },
+            { "STREET CRED",     "-20% raid frequency",              40 },
+        }};
+        return P;
+    }
+
+    inline const std::array<QuestDef, 10>& getQuests()
+    {
+        static const std::array<QuestDef, 10> Q = {{
+            { "GRIND THE BOOTH",  "build 3 STUDIOS",            0, 3,  3000, 1, BType::Studio    },
+            { "STREET TYCOON",    "build 4 TRAP HOUSES",        0, 4,  2000, 1, BType::TrapHouse },
+            { "HUNTER",           "kill 25 opps",               1, 25, 2500, 2, BType::Empty     },
+            { "MASSACRE",         "kill 75 opps",               1, 75, 8000, 5, BType::Empty     },
+            { "BAG SECURED",      "earn $10K in a run",         2, 10000, 3000, 2, BType::Empty   },
+            { "GETTING RICH",     "earn $100K in a run",        2, 100000, 20000, 8, BType::Empty },
+            { "ROCKY ROAD",       "survive 2 minutes",          3, 120, 4000, 3, BType::Empty     },
+            { "DYNASTY",          "survive 5 minutes",          3, 300, 12000, 6, BType::Empty    },
+            { "BROADCAST MOGUL",  "fire RADIO 3 times",         4, 3,  2000, 2, BType::Radio     },
+            { "EMPIRE CORE",      "build LABEL HQ",             0, 1, 10000, 5, BType::Label     },
+        }};
+        return Q;
+    }
+
+    //==========================================================================
     // Runtime data
     //==========================================================================
     struct Tile
@@ -234,7 +295,19 @@ namespace th::game
         int   level { 0 };
         int   hp    { 0 };        // current; 0 means destroyed
         bool  hazard { false };    // procedural hazard tile (cannot build)
+        // v6.4 active-ability system — tiles with abilities tick this down,
+        // fire when clicked and ready, then reset to the cooldown.
+        float abilityCd { 0.0f };
     };
+
+    // True when a building type has a manual ability the player can fire.
+    inline bool buildingHasAbility (BType t) noexcept
+    {
+        return t == BType::Radio
+            || t == BType::Studio
+            || t == BType::Venue
+            || t == BType::Mansion;
+    }
 
     struct Opp
     {
@@ -242,9 +315,10 @@ namespace th::game
         float vx, vy;
         int   hp, maxHp;
         int   dmg;
-        int   type;            // 0=rookie, 1=vet, 2=boss
+        int   type;            // 0=rookie, 1=vet, 2=miniboss, 3=drone, 4=thief
         int   targetCol, targetRow;  // next tile to attack
         float atkCooldown;
+        bool  isNamedBoss { false };   // v6.5 — true for BOSS-raid bosses
     };
 
     struct RaidWarning
@@ -287,6 +361,46 @@ namespace th::game
         ParticleKind kind { ParticleKind::Note };
     };
 
+    // v6.2 — ambient citizen walkers. Purely decorative; they wander between
+    // buildings on the road grid so the empire feels alive.
+    struct Worker
+    {
+        float x       { 0.0f };
+        float y       { 0.0f };
+        float vx      { 0.0f };
+        float vy      { 0.0f };
+        float life    { 1.0f };
+        int   palette { 0 };     // colour scheme index
+        float walkPhase { 0.0f };
+    };
+
+    // v6.5 — coin flight animation — spawns when a building earns money;
+    // flies toward the HUD money counter as visual income feedback.
+    struct CoinFlight
+    {
+        float fromX { 0.0f }, fromY { 0.0f };
+        float toX   { 0.0f }, toY   { 0.0f };
+        float progress { 0.0f };      // 0..1
+        float speed    { 1.5f };      // per second
+        int   amount   { 0 };
+    };
+
+    // v6.5 — named bosses that spawn on boss-raid waves
+    inline const std::array<const char*, 8>& getBossNames()
+    {
+        static const std::array<const char*, 8> N = {{
+            "THE ENFORCER",
+            "MC SLAUGHTER",
+            "DJ KILLSWITCH",
+            "LIL NECROMANCER",
+            "YUNG KATANA",
+            "404 REAPER",
+            "KING OF PAIN",
+            "TRAP TERMINATOR",
+        }};
+        return N;
+    }
+
     //==========================================================================
     // Phases
     //==========================================================================
@@ -304,6 +418,7 @@ namespace th::game
         int     prestige      { 0 };      // gates plugin flourish
         int     unlockMask    { 0 };      // bit per BType unlocked for future runs
         int     skinMask      { 0 };      // bit per plugin skin unlocked
+        int     perkMask      { 0 };      // v6.6 — bit per permanent perk bought
         int     deepestZone   { 0 };      // compat mirror (1 = ever owned LABEL HQ)
         int64_t lastSavedMs   { 0 };
 
@@ -319,8 +434,23 @@ namespace th::game
         int     empireHp      { 100 };
         int     empireMaxHp   { 100 };
         float   hype          { 50.0f };
+        // v6.4 — short-lived multiplier buff (set by Radio BROADCAST, events...)
+        double  eventMultiplier { 1.0 };
+        int64_t eventEndMs      { 0 };
         // Starter rolls (3 random indices)
         std::array<int, 3> offeredStarters { { 0, 1, 2 } };
+        // v6.5 — active quests (2 per run). Indices into getQuests(); -1 = none.
+        std::array<int, 2> questIdx      { { -1, -1 } };
+        std::array<int, 2> questProgress { { 0, 0 } };
+        std::array<bool, 2> questDone    { { false, false } };
+        // v6.5 — kill counter + ability use counter for quest tracking
+        int runKills       { 0 };
+        int runAbilityUses { 0 };
+        // v6.5 — boss raid tracker (active named boss, if any)
+        int  bossAlive     { 0 };
+        int  bossTotalHp   { 0 };
+        int  bossCurrentHp { 0 };
+        juce::String bossName;
 
         juce::ValueTree toValueTree() const
         {
@@ -331,6 +461,7 @@ namespace th::game
             vt.setProperty ("prestige",      prestige,      nullptr);
             vt.setProperty ("unlockMask",    unlockMask,    nullptr);
             vt.setProperty ("skinMask",      skinMask,      nullptr);
+            vt.setProperty ("perkMask",      perkMask,      nullptr);
             vt.setProperty ("deepestZone",   deepestZone,   nullptr);
             vt.setProperty ("lastSavedMs",   (juce::int64) lastSavedMs, nullptr);
             // Plugin-facing compat (ICE gate checks count_3 > 0)
@@ -371,6 +502,7 @@ namespace th::game
             prestige      = (int)    vt.getProperty ("prestige",      0);
             unlockMask    = (int)    vt.getProperty ("unlockMask",    0);
             skinMask      = (int)    vt.getProperty ("skinMask",      0);
+            perkMask      = (int)    vt.getProperty ("perkMask",      0);
             deepestZone   = (int)    vt.getProperty ("deepestZone",   0);
             lastSavedMs   = (int64_t) (juce::int64) vt.getProperty ("lastSavedMs", 0);
 
@@ -526,7 +658,12 @@ namespace th::game
         std::vector<RaidWarning>   warnings;
         std::vector<FloatingText>  floaters;
         std::vector<Particle>      particles;
+        std::vector<Worker>        workers;
+        std::vector<CoinFlight>    coinFlights;  // v6.5 — income visual feedback
         float                      particleSpawnAccum { 0.0f };
+        float                      workerSpawnAccum   { 0.0f };
+        float                      coinSpawnAccum     { 0.0f };
+        float                      bossRaidAccum      { 0.0f };  // v6.5 — every ~180s triggers a boss
         int64_t                    cycleStartMs { 0 };
         juce::Random               rng;
         bool                       draggingHandle { false };
@@ -542,6 +679,17 @@ namespace th::game
         int   buildMenuCol  { 0 };
         int   buildMenuRow  { 0 };
         int   buildMenuScroll { 0 };  // for paging through build options
+
+        // v6.2 — Help overlay + first-time tutorial hint
+        bool  helpOpen { false };
+        int   tutorialHintFrames { 150 };   // ~5 s on first Playing entry
+
+        // v6.3 — big achievement banner (shown on building unlock)
+        juce::String bigBannerText;
+        int          bigBannerFrames { 0 };
+
+        // v6.6 — perk tree overlay open on main menu
+        bool perkTreeOpen { false };
 
         // Timing
         float secondsToNextRaid  { 45.0f };
@@ -611,10 +759,32 @@ namespace th::game
             save.empireHp = 0;
             save.empireMaxHp = 0;
             save.hype = 50.0f;
+            save.runKills = 0;
+            save.runAbilityUses = 0;
+            save.bossAlive = 0;
+            save.bossTotalHp = 0;
+            save.bossCurrentHp = 0;
+            save.bossName = "";
             opps.clear();
             warnings.clear();
+            coinFlights.clear();
+            particles.clear();
+            workers.clear();
             secondsToNextRaid  = 50.0f;
             secondsToNextEvent = 70.0f;
+            bossRaidAccum      = 0.0f;
+
+            // v6.5 — roll 2 random quests (distinct)
+            std::array<int, 10> qpool { { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 } };
+            for (int i = 9; i > 0; --i)
+                std::swap (qpool[(size_t) i], qpool[(size_t) rng.nextInt (i + 1)]);
+            save.questIdx[0] = qpool[0];
+            save.questIdx[1] = qpool[1];
+            save.questProgress[0] = 0;
+            save.questProgress[1] = 0;
+            save.questDone[0] = false;
+            save.questDone[1] = false;
+
             save.phase = Phase::StarterPick;
         }
 
@@ -665,7 +835,12 @@ namespace th::game
             if (idx == 2)
                 save.unlockMask |= (1 << (int) BType::Label);
 
+            // v6.6 — apply permanent perks on run start
+            if (hasPerk (0)) { save.money += 500; }   // SIDE HUSTLE
+            // FORTIFIED (+50 max HP) applied in recomputeEmpireHp below
+
             save.phase = Phase::Playing;
+            tutorialHintFrames = 150;   // ~5 s onboarding hint
             recomputeEmpireHp();
         }
 
@@ -683,10 +858,10 @@ namespace th::game
                     && save.bankedAllTime >= getBuildings()[(size_t) i].unlockThreshold)
                 {
                     save.unlockMask |= (1 << i);
-                    spawnFloater (juce::String ("UNLOCKED ")
-                                  + getBuildings()[(size_t) i].name,
-                                  (float) getWidth() * 0.5f, 60.0f,
-                                  juce::Colour (0xFFC6FF00));
+                    // Full-screen slide-in banner — better than a floater
+                    bigBannerText = juce::String ("NEW BUILDING UNLOCKED: ")
+                                    + getBuildings()[(size_t) i].name;
+                    bigBannerFrames = 150; // 5 s
                 }
             save.phase = Phase::GameOver;
         }
@@ -694,12 +869,21 @@ namespace th::game
         //======================================================================
         // Economy
         //======================================================================
+        bool hasPerk (int idx) const noexcept
+        {
+            return (save.perkMask & (1 << idx)) != 0;
+        }
+
         float currentIncomeMul() const
         {
             const auto& mod = getRunMods()[(size_t) save.runModIdx];
             const float hypeMul = 1.0f + (save.hype / 100.0f) * 0.5f;   // 1.0..1.5
             const float legMul  = 1.0f + save.legendPoints * 0.02f;     // +2% per point
             float mul = mod.incomeMul * hypeMul * legMul;
+            if (hasPerk (1)) mul *= 1.10f;   // LABEL CONNECTS
+            // v6.4 — active short-lived boost (Radio BROADCAST etc.)
+            if (save.eventEndMs > juce::Time::currentTimeMillis())
+                mul *= (float) save.eventMultiplier;
             // Viral starter: first 60s x2
             if (save.starterIdx == 3 && save.runTick < 30 * 60)
                 mul *= 2.0f;
@@ -709,8 +893,9 @@ namespace th::game
         int getBuildingCost (BType type) const
         {
             const int base = getBuildings()[(size_t) type].baseCost;
-            return (int) std::round ((float) base
-                                     * getRunMods()[(size_t) save.runModIdx].buildCostMul);
+            float mul = getRunMods()[(size_t) save.runModIdx].buildCostMul;
+            if (hasPerk (2)) mul *= 0.85f;     // WHOLESALE
+            return (int) std::round ((float) base * mul);
         }
 
         void tickIncome (float dt)
@@ -740,12 +925,41 @@ namespace th::game
             save.bankedAllTime += earnedThisTick;
             if (earnedThisTick > 0.0)
             {
+                // v6.5 quest — earn X cash in this run
+                noteQuestEvent (2, (int) earnedThisTick);
+
                 // Mark deepestZone compat for processor ICE gate
                 // (set when the player has ever owned a Label HQ)
                 for (int c = 0; c < GRID_W && save.deepestZone < 1; ++c)
                     for (int r = 0; r < GRID_H && save.deepestZone < 1; ++r)
                         if (save.grid[(size_t) c][(size_t) r].type == BType::Label)
                             save.deepestZone = 1;
+
+                // v6.5 — spawn coin flights from a random income-building
+                // every ~0.8 s so the HUD counter feels *alive*
+                coinSpawnAccum += dt;
+                if (coinSpawnAccum >= 0.7f)
+                {
+                    coinSpawnAccum = 0.0f;
+                    // Find a random active income tile to shoot the coin from
+                    std::vector<std::pair<int,int>> incomeTiles;
+                    for (int c = 0; c < GRID_W; ++c)
+                        for (int r = 0; r < GRID_H; ++r)
+                        {
+                            const auto& t = save.grid[(size_t) c][(size_t) r];
+                            if (t.hp > 0 && B[(size_t) t.type].category == 0)
+                                incomeTiles.push_back ({ c, r });
+                        }
+                    if (! incomeTiles.empty())
+                    {
+                        const auto [ic, ir] = incomeTiles[(size_t)
+                            rng.nextInt ((int) incomeTiles.size())];
+                        const auto sp = tileToScreen (ic, ir);
+                        spawnCoinFlight (sp.x + TILE_W * 0.5f,
+                                          sp.y + TILE_H * 0.5f,
+                                          (int) earnedThisTick);
+                    }
+                }
             }
         }
 
@@ -779,6 +993,7 @@ namespace th::game
                 }
             save.empireHp = total;
             save.empireMaxHp = juce::jmax (1, totalMax);
+            if (hasPerk (3)) save.empireMaxHp += 50;  // FORTIFIED
         }
 
         //======================================================================
@@ -801,6 +1016,7 @@ namespace th::game
                           tileToScreen (c, r).x + TILE_W * 0.5f,
                           tileToScreen (c, r).y,
                           juce::Colour (0xFFC6FF00));
+            noteQuestEvent (0, 1, type);         // v6.5 quest: build X of type
             buildMenuOpen = false;
         }
 
@@ -834,6 +1050,186 @@ namespace th::game
         }
 
         //======================================================================
+        // v6.4 — Active abilities (click ⚡ power icon on Radio/Studio/Venue/Mansion)
+        //======================================================================
+        float getAbilityCooldownFor (BType t) const noexcept
+        {
+            switch (t)
+            {
+                case BType::Radio:    return 60.0f;    // 1 min cooldown
+                case BType::Studio:   return 90.0f;
+                case BType::Venue:    return 180.0f;
+                case BType::Mansion:  return 300.0f;
+                default:              return 0.0f;
+            }
+        }
+
+        // Draw the small ⚡ power button above a building tile
+        juce::Rectangle<int> getAbilityBtnRect (int c, int r) const noexcept
+        {
+            const auto p = tileToScreen (c, r);
+            return { (int) (p.x + TILE_W - 12.0f), (int) (p.y - 1.0f), 10, 10 };
+        }
+
+        void tryFireAbility (int c, int r)
+        {
+            auto& t = save.grid[(size_t) c][(size_t) r];
+            if (! buildingHasAbility (t.type) || t.hp <= 0) return;
+            if (t.abilityCd > 0.0f) return;
+
+            const int lv = juce::jmax (1, t.level);
+            const auto screen = tileToScreen (c, r);
+            const float sx = screen.x + TILE_W * 0.5f;
+            const float sy = screen.y;
+
+            switch (t.type)
+            {
+                case BType::Radio:
+                {
+                    // BROADCAST: x1.5 income for 10 seconds
+                    save.eventMultiplier = juce::jmax (save.eventMultiplier, 1.5);
+                    save.eventEndMs = juce::Time::currentTimeMillis() + 10000;
+                    save.hype = juce::jmin (100.0f, save.hype + 25.0f);
+                    spawnFloater ("BROADCAST  x1.5", sx, sy,
+                                  juce::Colour (0xFFC6FF00));
+                    break;
+                }
+                case BType::Studio:
+                {
+                    // PLATINUM: +$500 per level
+                    const int bonus = 500 * lv;
+                    save.money       += bonus;
+                    save.totalEarnedRun += bonus;
+                    save.bankedAllTime += bonus;
+                    spawnFloater (juce::String ("+$") + juce::String (bonus) + " PLATINUM",
+                                  sx, sy, juce::Colour (0xFFCE93D8));
+                    break;
+                }
+                case BType::Venue:
+                {
+                    // SOLD-OUT SHOW: +$5K per level
+                    const int bonus = 5000 * lv;
+                    save.money       += bonus;
+                    save.totalEarnedRun += bonus;
+                    save.bankedAllTime += bonus;
+                    save.hype = juce::jmin (100.0f, save.hype + 35.0f);
+                    spawnFloater (juce::String ("SOLD OUT  +$") + juce::String (bonus),
+                                  sx, sy, juce::Colour (0xFFFFEB3B));
+                    break;
+                }
+                case BType::Mansion:
+                {
+                    // GALA NIGHT: +$25K per level + big hype
+                    const int bonus = 25000 * lv;
+                    save.money       += bonus;
+                    save.totalEarnedRun += bonus;
+                    save.bankedAllTime += bonus;
+                    save.hype = 100.0f;
+                    spawnFloater (juce::String ("GALA  +$") + juce::String (bonus),
+                                  sx, sy, juce::Colour (0xFFFFD700));
+                    break;
+                }
+                default: break;
+            }
+            t.abilityCd = getAbilityCooldownFor (t.type);
+            save.runAbilityUses++;
+            noteQuestEvent (4, 1, t.type);       // v6.5 quest: fire ability X times
+        }
+
+        void tickAbilityCooldowns (float dt)
+        {
+            for (int c = 0; c < GRID_W; ++c)
+                for (int r = 0; r < GRID_H; ++r)
+                {
+                    auto& t = save.grid[(size_t) c][(size_t) r];
+                    if (t.abilityCd > 0.0f)
+                        t.abilityCd = juce::jmax (0.0f, t.abilityCd - dt);
+                }
+        }
+
+        //======================================================================
+        // v6.5 — Quest progress tracking. Each mutable game event (build, kill,
+        // earn, tick-time, ability-use) calls noteQuestEvent with the kind
+        // it matches; we increment active quests and reward when they hit.
+        //======================================================================
+        void noteQuestEvent (int kind, int amount = 1, BType type = BType::Empty)
+        {
+            for (int slot = 0; slot < 2; ++slot)
+            {
+                if (save.questDone[(size_t) slot]) continue;
+                const int qIdx = save.questIdx[(size_t) slot];
+                if (qIdx < 0) continue;
+                const auto& q = getQuests()[(size_t) qIdx];
+                if (q.kind != kind) continue;
+                // Type-filtered quests (kinds 0 & 4)
+                if ((kind == 0 || kind == 4)
+                    && q.targetType != BType::Empty
+                    && q.targetType != type) continue;
+                save.questProgress[(size_t) slot] += amount;
+                if (save.questProgress[(size_t) slot] >= q.target)
+                {
+                    save.questDone[(size_t) slot] = true;
+                    save.money        += q.rewardCash;
+                    save.totalEarnedRun += q.rewardCash;
+                    save.legendPoints += q.rewardLegend;
+                    spawnFloater (juce::String ("QUEST DONE  +$")
+                                  + juce::String (q.rewardCash) + "  +"
+                                  + juce::String (q.rewardLegend) + " LP",
+                                  (float) getWidth() * 0.5f,
+                                  36.0f + (float) slot * 14.0f,
+                                  juce::Colour (0xFFC6FF00));
+                }
+            }
+        }
+
+        //======================================================================
+        // v6.5 — coin-flight animation spawns
+        //======================================================================
+        void spawnCoinFlight (float fromX, float fromY, int amount)
+        {
+            if ((int) coinFlights.size() >= 30) return;
+            CoinFlight c;
+            c.fromX = fromX;
+            c.fromY = fromY;
+            c.toX   = 22.0f;                                  // HUD $ position
+            c.toY   = (float) hudTopRect.getCentreY();
+            c.progress = 0.0f;
+            c.speed = 1.3f + (float) rng.nextInt (6) * 0.05f;
+            c.amount = amount;
+            coinFlights.push_back (c);
+        }
+
+        void updateCoinFlights (float dt)
+        {
+            for (auto& c : coinFlights) c.progress += c.speed * dt;
+            coinFlights.erase (std::remove_if (coinFlights.begin(), coinFlights.end(),
+                [] (const CoinFlight& c) { return c.progress >= 1.0f; }), coinFlights.end());
+        }
+
+        void drawCoinFlights (juce::Graphics& g)
+        {
+            for (const auto& c : coinFlights)
+            {
+                const float t = juce::jlimit (0.0f, 1.0f, c.progress);
+                // Arc trajectory (control point above the midpoint)
+                const float midX = (c.fromX + c.toX) * 0.5f;
+                const float midY = juce::jmin (c.fromY, c.toY) - 16.0f;
+                const float u = 1.0f - t;
+                const float x = u * u * c.fromX + 2.0f * u * t * midX + t * t * c.toX;
+                const float y = u * u * c.fromY + 2.0f * u * t * midY + t * t * c.toY;
+                // Coin body
+                g.setColour (juce::Colour (0xFFFFD700));
+                g.fillEllipse (x - 3.0f, y - 3.0f, 6.0f, 6.0f);
+                g.setColour (juce::Colour (0xFFFFF59D));
+                g.fillEllipse (x - 1.5f, y - 2.0f, 2.0f, 2.0f);
+                g.setColour (juce::Colour (0xFF0A1000));
+                g.setFont (juce::Font (5.0f, juce::Font::bold));
+                g.drawText ("$", juce::Rectangle<int> ((int) x - 3, (int) y - 3, 6, 6),
+                            juce::Justification::centred);
+            }
+        }
+
+        //======================================================================
         // Raids / opps
         //======================================================================
         void scheduleRaid()
@@ -862,8 +1258,13 @@ namespace th::game
                     default:o.x = -0.5f;          o.y = (float) rng.nextInt (GRID_H);break; // left
                 }
                 const float r = rng.nextFloat();
-                if (r < 0.07f) { o.type = 2; o.hp = 20 + save.runTick / (30 * 60); o.dmg = 12; }
-                else if (r < 0.30f) { o.type = 1; o.hp = 6;  o.dmg = 5; }
+                // v6.4/6.6 opp roster:
+                //   0 rookie  1 vet  2 miniboss  3 drone  4 thief  5 BOMBER
+                if      (r < 0.05f) { o.type = 4; o.hp = 3; o.dmg = 0;  }   // thief
+                else if (r < 0.10f) { o.type = 5; o.hp = 2; o.dmg = 30; }   // bomber (aoe)
+                else if (r < 0.17f) { o.type = 3; o.hp = 3; o.dmg = 3;  }   // drone
+                else if (r < 0.25f) { o.type = 2; o.hp = 20 + save.runTick / (30 * 60); o.dmg = 12; }
+                else if (r < 0.50f) { o.type = 1; o.hp = 6;  o.dmg = 5; }
                 else                { o.type = 0; o.hp = 2;  o.dmg = 2; }
                 o.maxHp = o.hp;
                 o.vx = 0.0f; o.vy = 0.0f;
@@ -907,7 +1308,40 @@ namespace th::game
                 const float dx = (float) o.targetCol - o.x;
                 const float dy = (float) o.targetRow - o.y;
                 const float d  = std::sqrt (dx * dx + dy * dy);
-                const float speed = (o.type == 2) ? 0.35f : (o.type == 1 ? 0.55f : 0.75f);
+                // v6.4 speeds by type: boss slowest, drone + thief fastest
+                const float speed = (o.type == 2) ? 0.35f
+                                   : (o.type == 1) ? 0.55f
+                                   : (o.type == 3) ? 0.95f   // drone
+                                   : (o.type == 4) ? 1.10f   // thief
+                                                    : 0.75f;
+
+                // v6.4 — wall collision: ground opps (type != 3 drone) that
+                // would step onto a WALL, ARMORY, or TURRET instead attack
+                // that blocking tile. Makes defensive placement actually
+                // matter — a wall line funnels opps into a kill zone.
+                if (d > 0.05f && o.type != 3 && o.type != 4)
+                {
+                    const float stepX = dx / d * speed * dt;
+                    const float stepY = dy / d * speed * dt;
+                    const int nextC = (int) juce::jlimit (0.0f, (float) (GRID_W - 1), o.x + stepX);
+                    const int nextR = (int) juce::jlimit (0.0f, (float) (GRID_H - 1), o.y + stepY);
+                    if (nextC != (int) o.x || nextR != (int) o.y)
+                    {
+                        const auto& bt = save.grid[(size_t) nextC][(size_t) nextR];
+                        const bool isBlock = bt.hp > 0 && (bt.type == BType::Wall
+                                                            || bt.type == BType::Armory
+                                                            || bt.type == BType::Turret);
+                        // Only retarget if the blocker isn't ALREADY our target
+                        if (isBlock && (nextC != o.targetCol || nextR != o.targetRow))
+                        {
+                            o.targetCol = nextC;
+                            o.targetRow = nextR;
+                            // fall through to attack logic this frame (distance ~0)
+                            continue;
+                        }
+                    }
+                }
+
                 if (d > 0.05f)
                 {
                     o.x += dx / d * speed * dt;
@@ -915,9 +1349,56 @@ namespace th::game
                 }
                 else
                 {
-                    // Attack the tile
                     auto& t = save.grid[(size_t) o.targetCol][(size_t) o.targetRow];
                     o.atkCooldown -= dt;
+
+                    if (o.type == 4)
+                    {
+                        // THIEF: on arrival, steal 10% of money + HALF the stash
+                        // then flee off-map. Doesn't damage buildings.
+                        if (o.atkCooldown <= 0.0f)
+                        {
+                            const int stolen = (int) juce::jmin (save.money * 0.10,
+                                                                  2000.0 + save.runTick * 0.5);
+                            if (stolen > 0)
+                            {
+                                save.money -= stolen;
+                                spawnFloater (juce::String ("STOLEN -$") + juce::String (stolen),
+                                              tileToScreen (o.targetCol, o.targetRow).x + TILE_W * 0.5f,
+                                              tileToScreen (o.targetCol, o.targetRow).y,
+                                              juce::Colour (0xFFFF5252));
+                            }
+                            // Retarget to edge of map to flee
+                            o.targetCol = (o.x < GRID_W * 0.5f) ? -1 : GRID_W;
+                            o.targetRow = (int) o.y;
+                            o.hp = juce::jmin (o.hp, 1);  // easy kill if intercepted on flight out
+                            o.atkCooldown = 10.0f;          // only steal once
+                        }
+                        continue;
+                    }
+
+                    if (o.type == 5)
+                    {
+                        // BOMBER: explode on contact — 3x3 AoE, then dies
+                        for (int oc = -1; oc <= 1; ++oc)
+                            for (int orow = -1; orow <= 1; ++orow)
+                            {
+                                const int bc = o.targetCol + oc;
+                                const int br = o.targetRow + orow;
+                                if (bc < 0 || bc >= GRID_W || br < 0 || br >= GRID_H) continue;
+                                auto& bt = save.grid[(size_t) bc][(size_t) br];
+                                if (bt.hp <= 0) continue;
+                                bt.hp = juce::jmax (0, bt.hp - o.dmg);
+                                spawnFloater ("BOOM",
+                                              tileToScreen (bc, br).x + TILE_W * 0.5f,
+                                              tileToScreen (bc, br).y,
+                                              juce::Colour (0xFFFF1744));
+                                if (bt.hp == 0) bt = Tile{};
+                            }
+                        o.hp = 0;       // bomber dies
+                        continue;
+                    }
+
                     if (o.atkCooldown <= 0.0f && t.hp > 0)
                     {
                         t.hp -= o.dmg;
@@ -972,14 +1453,40 @@ namespace th::game
                         }
                     }
             }
-            // Cull dead opps and drop cash
+            // Sync boss UI tracker to the live boss opp (if any)
+            for (const auto& op : opps)
+                if (op.isNamedBoss)
+                {
+                    save.bossCurrentHp = op.hp;
+                    break;
+                }
+
+            // Cull dead opps, drop cash, reward boss
             opps.erase (std::remove_if (opps.begin(), opps.end(),
                 [&] (const Opp& o) {
                     if (o.hp <= 0)
                     {
-                        const int drop = 30 + o.type * 80;
+                        int drop = 30 + o.type * 80;
+                        if (hasPerk (4)) drop = (int) (drop * 1.20f);  // CRYPTO KING
                         save.money += drop;
                         save.totalEarnedRun += drop;
+                        save.runKills++;
+                        noteQuestEvent (1, 1);   // v6.5 quest: kill X opps
+                        if (o.isNamedBoss)
+                        {
+                            // Boss killed: major reward + clear boss state
+                            const int reward = 15000 + save.runTick / 30 * 20;
+                            save.money         += reward;
+                            save.totalEarnedRun += reward;
+                            save.bankedAllTime += reward;
+                            save.legendPoints  += 3;
+                            save.bossAlive = 0;
+                            save.bossCurrentHp = 0;
+                            bigBannerText   = juce::String ("BOSS DOWN: ")
+                                             + save.bossName + "  +$"
+                                             + juce::String (reward);
+                            bigBannerFrames = 150;
+                        }
                         return true;
                     }
                     return false;
@@ -1041,13 +1548,22 @@ namespace th::game
             if (save.phase == Phase::Playing)
             {
                 save.runTick++;
+                if (tutorialHintFrames > 0) --tutorialHintFrames;
+                // v6.5 survive-quest: tick every whole second
+                if (save.runTick > 0 && save.runTick % 30 == 0)
+                    noteQuestEvent (3, 1);
                 tickIncome (dt);
+                tickAbilityCooldowns (dt);
 
                 // Hype decay slowly
                 save.hype = juce::jmax (0.0f, save.hype - dt * 1.0f);
 
-                // Raid timer
-                secondsToNextRaid -= dt * getRunMods()[(size_t) save.runModIdx].raidFreqMul;
+                // Raid timer (STREET CRED perk cuts raid frequency by 20%)
+                {
+                    float freqMul = getRunMods()[(size_t) save.runModIdx].raidFreqMul;
+                    if (hasPerk (5)) freqMul *= 0.80f;
+                    secondsToNextRaid -= dt * freqMul;
+                }
                 if (secondsToNextRaid <= 0.0f)
                 {
                     scheduleRaid();
@@ -1068,7 +1584,14 @@ namespace th::game
                     it->timeToSpawn -= dt;
                     if (it->timeToSpawn <= 0.0f)
                     {
-                        spawnRaidOpps (*it);
+                        // v6.5 — a warning with waveCount==1 while a boss is
+                        // queued (bossAlive==1 but no opp with boss HP yet)
+                        // spawns the actual boss. Otherwise it's a regular raid.
+                        if (it->waveCount == 1 && save.bossAlive == 1
+                            && save.bossCurrentHp > 0)
+                            spawnBossOpp (*it);
+                        else
+                            spawnRaidOpps (*it);
                         it = warnings.erase (it);
                     }
                     else ++it;
@@ -1092,8 +1615,81 @@ namespace th::game
                 spawnAmbientParticles (dt);
             updateParticles (dt);
 
+            // v6.2 — ambient workers walking around between buildings
+            if (save.phase == Phase::Playing)
+            {
+                workerSpawnAccum += dt;
+                if (workerSpawnAccum >= 1.2f && (int) workers.size() < 8)
+                {
+                    spawnWorker();
+                    workerSpawnAccum = 0.0f;
+                }
+            }
+            updateWorkers (dt);
+
+            // v6.5 — coin-flight animations
+            updateCoinFlights (dt);
+
+            // v6.5 — every 180 s force a BOSS raid if one isn't already active
+            if (save.phase == Phase::Playing)
+            {
+                bossRaidAccum += dt;
+                if (bossRaidAccum >= 180.0f && save.bossAlive == 0)
+                {
+                    scheduleBossRaid();
+                    bossRaidAccum = 0.0f;
+                }
+            }
+
+            if (bigBannerFrames > 0) --bigBannerFrames;
+
             save.lastSavedMs = nowMs;
             repaint();
+        }
+
+        //======================================================================
+        // v6.5 — Boss raids (one BIG named opp, lots of HP, lots of damage,
+        // drops a juicy cash bounty if killed).
+        //======================================================================
+        void scheduleBossRaid()
+        {
+            // Announce 8 seconds ahead (longer warning than a normal raid)
+            RaidWarning w;
+            w.edge         = rng.nextInt (4);
+            w.timeToSpawn  = 8.0f;
+            w.waveCount    = 1;                 // single boss
+            w.power        = 0;
+            warnings.push_back (w);
+            // Mark boss as "coming"
+            const auto& names = getBossNames();
+            save.bossName = names[(size_t) rng.nextInt ((int) names.size())];
+            save.bossAlive = 1;
+            save.bossTotalHp = 60 + save.runTick / (30 * 30);   // scales with time
+            save.bossCurrentHp = save.bossTotalHp;
+            spawnFloater (juce::String ("BOSS INCOMING: ") + save.bossName,
+                          (float) getWidth() * 0.5f, 34.0f,
+                          juce::Colour (0xFFFF1744));
+        }
+
+        // Called from spawnRaidOpps when the warning is the boss one (flagged by
+        // waveCount == 1 AND save.bossAlive == 1). Spawns the boss sprite.
+        void spawnBossOpp (const RaidWarning& w)
+        {
+            Opp o;
+            switch (w.edge)
+            {
+                case 0: o.x = GRID_W * 0.5f;  o.y = -0.6f;          break;
+                case 1: o.x = GRID_W - 0.4f;  o.y = GRID_H * 0.5f;  break;
+                case 2: o.x = GRID_W * 0.5f;  o.y = GRID_H - 0.4f;  break;
+                default:o.x = -0.6f;          o.y = GRID_H * 0.5f;  break;
+            }
+            o.type = 2;                          // reuse boss visuals
+            o.hp = save.bossTotalHp;
+            o.maxHp = o.hp;
+            o.dmg = 18 + save.runTick / (30 * 60);
+            o.isNamedBoss = true;
+            retargetOpp (o);
+            opps.push_back (o);
         }
 
         //======================================================================
@@ -1190,6 +1786,89 @@ namespace th::game
                 [] (const Particle& p) { return p.life <= 0.0f; }), particles.end());
         }
 
+        //======================================================================
+        // v6.2 — workers (ambient walkers on the road grid)
+        //======================================================================
+        void spawnWorker()
+        {
+            Worker w;
+            // Spawn from a random grid edge
+            const int side = rng.nextInt (4);
+            const float gx0 = (float) gridRect.getCentreX() - (GRID_W * TILE_W) * 0.5f;
+            const float gy0 = (float) gridRect.getCentreY() - (GRID_H * TILE_H) * 0.5f;
+            const float gw = GRID_W * TILE_W;
+            const float gh = GRID_H * TILE_H;
+            switch (side)
+            {
+                case 0: w.x = gx0 + rng.nextFloat() * gw; w.y = gy0 - 2.0f;      w.vx = 0; w.vy = 0.6f;  break;
+                case 1: w.x = gx0 + gw + 2.0f; w.y = gy0 + rng.nextFloat() * gh; w.vx = -0.6f; w.vy = 0; break;
+                case 2: w.x = gx0 + rng.nextFloat() * gw; w.y = gy0 + gh + 2.0f; w.vx = 0; w.vy = -0.6f; break;
+                default:w.x = gx0 - 2.0f; w.y = gy0 + rng.nextFloat() * gh;      w.vx = 0.6f;  w.vy = 0; break;
+            }
+            w.palette = rng.nextInt (4);
+            w.life = 1.0f;
+            workers.push_back (w);
+        }
+
+        void updateWorkers (float dt)
+        {
+            for (auto& w : workers)
+            {
+                // Every ~1s, roll a chance to change direction (meander)
+                if (rng.nextFloat() < 0.015f)
+                {
+                    const int dir = rng.nextInt (4);
+                    const float sp = 0.5f;
+                    switch (dir)
+                    {
+                        case 0: w.vx = sp;  w.vy = 0;    break;
+                        case 1: w.vx = -sp; w.vy = 0;    break;
+                        case 2: w.vx = 0;   w.vy = sp;   break;
+                        default:w.vx = 0;   w.vy = -sp;  break;
+                    }
+                }
+                w.x += w.vx * 30.0f * dt;
+                w.y += w.vy * 30.0f * dt;
+                w.walkPhase += 0.3f;
+                // Clip off-grid + life decay
+                const float gx0 = (float) gridRect.getCentreX() - (GRID_W * TILE_W) * 0.5f;
+                const float gy0 = (float) gridRect.getCentreY() - (GRID_H * TILE_H) * 0.5f;
+                if (w.x < gx0 - 6.0f || w.x > gx0 + GRID_W * TILE_W + 6.0f
+                 || w.y < gy0 - 6.0f || w.y > gy0 + GRID_H * TILE_H + 6.0f)
+                    w.life = 0.0f;
+            }
+            workers.erase (std::remove_if (workers.begin(), workers.end(),
+                [] (const Worker& w) { return w.life <= 0.0f; }), workers.end());
+        }
+
+        void drawWorkers (juce::Graphics& g)
+        {
+            for (const auto& w : workers)
+            {
+                const std::array<juce::Colour, 4> shirts = {{
+                    juce::Colour (0xFF7E57C2),
+                    juce::Colour (0xFFEF5350),
+                    juce::Colour (0xFF42A5F5),
+                    juce::Colour (0xFFFFCA28)
+                }};
+                const juce::Colour skin  (0xFFFFD180);
+                const int legBob = ((int) w.walkPhase) % 2;
+                // Shadow
+                g.setColour (juce::Colour (0xFF000000).withAlpha (0.3f));
+                g.fillEllipse (w.x - 2.0f, w.y + 3.0f, 4.0f, 1.5f);
+                // Body
+                g.setColour (shirts[(size_t) (w.palette & 3)]);
+                g.fillRect (w.x - 1.5f, w.y - 1.0f, 3.0f, 3.0f);
+                // Head
+                g.setColour (skin);
+                g.fillRect (w.x - 1.0f, w.y - 3.0f, 2.0f, 2.0f);
+                // Legs
+                g.setColour (juce::Colour (0xFF3E2723));
+                g.fillRect (w.x - 1.0f, w.y + 2.0f, 1.0f, (float) (2 + legBob));
+                g.fillRect (w.x, w.y + 2.0f, 1.0f, (float) (2 + (1 - legBob)));
+            }
+        }
+
         void drawParticles (juce::Graphics& g)
         {
             for (const auto& p : particles)
@@ -1250,9 +1929,41 @@ namespace th::game
         //======================================================================
         void clickMenu (juce::Point<int> p)
         {
+            if (perkTreeOpen)
+            {
+                handlePerkTreeClick (p);
+                return;
+            }
             const auto btn = getGoTrappinBtnRect();
-            if (btn.contains (p))
-                startNewRun();
+            if (btn.contains (p)) { startNewRun(); return; }
+            if (getPerksBtnRect().contains (p)) { perkTreeOpen = true; return; }
+        }
+
+        void handlePerkTreeClick (juce::Point<int> p)
+        {
+            // Close if tapped outside the card
+            const auto card = getLocalBounds().withSizeKeepingCentre (440, 180);
+            if (! card.contains (p)) { perkTreeOpen = false; return; }
+
+            // Click on a perk row to buy it
+            const int n = (int) getPerks().size();
+            const int rowH = (card.getHeight() - 30) / n;
+            for (int i = 0; i < n; ++i)
+            {
+                const auto row = juce::Rectangle<int> (
+                    card.getX() + 8, card.getY() + 24 + i * rowH,
+                    card.getWidth() - 16, rowH - 2);
+                if (! row.contains (p)) continue;
+                if (save.perkMask & (1 << i)) return;           // already owned
+                const auto& perk = getPerks()[(size_t) i];
+                if (save.legendPoints < perk.cost) return;
+                save.legendPoints -= perk.cost;
+                save.perkMask |= (1 << i);
+                spawnFloater (juce::String ("+PERK ") + perk.name,
+                              (float) getWidth() * 0.5f, 20.0f,
+                              juce::Colour (0xFFC6FF00));
+                return;
+            }
         }
 
         void clickStarterPick (juce::Point<int> p)
@@ -1274,12 +1985,30 @@ namespace th::game
 
         void clickPlaying (juce::Point<int> p)
         {
+            // Help overlay takes priority: any tap closes it
+            if (helpOpen)
+            {
+                helpOpen = false;
+                return;
+            }
+
+            // Help button (top-right)
+            if (getHelpBtnRect().contains (p))
+            {
+                helpOpen = true;
+                tutorialHintFrames = 0; // kill the hint, user has discovered help
+                return;
+            }
+
             // Retire button (bottom-right)
             if (getRetireBtnRect().contains (p))
             {
                 endRun (false);
                 return;
             }
+
+            // Dismiss tutorial hint on any click in playing area
+            if (tutorialHintFrames > 0) tutorialHintFrames = juce::jmin (tutorialHintFrames, 30);
 
             if (buildMenuOpen)
             {
@@ -1292,6 +2021,16 @@ namespace th::game
             {
                 auto& t = save.grid[(size_t) c][(size_t) r];
                 if (t.hazard) return;
+                // v6.4 — if the tile has a ready ability and the user clicked
+                // the ⚡ power button, fire it (don't open the build menu).
+                if (buildingHasAbility (t.type)
+                    && t.hp > 0
+                    && t.abilityCd <= 0.0f
+                    && getAbilityBtnRect (c, r).contains (p))
+                {
+                    tryFireAbility (c, r);
+                    return;
+                }
                 buildMenuOpen = true;
                 buildMenuCol = c;
                 buildMenuRow = r;
@@ -1311,11 +2050,11 @@ namespace th::game
             }
             if (t.type == BType::Empty)
             {
-                // Build options — 4 per row
+                // 4 columns × 4 rows of richer cards
                 int idx = 0;
                 const int perRow = 4;
                 const int btnW = (menuR.getWidth() - 10) / perRow;
-                const int btnH = (menuR.getHeight() - 16) / 3;
+                const int btnH = (menuR.getHeight() - 18) / 4;
                 for (int i = 1; i < (int) BType::NUM_TYPES; ++i)
                 {
                     if ((save.unlockMask & (1 << i)) == 0) continue;
@@ -1324,7 +2063,7 @@ namespace th::game
                     idx++;
                     const juce::Rectangle<int> r (
                         menuR.getX() + 4 + col * btnW,
-                        menuR.getY() + 14 + row * btnH,
+                        menuR.getY() + 16 + row * btnH,
                         btnW - 4, btnH - 2);
                     if (r.contains (p))
                     {
@@ -1370,15 +2109,25 @@ namespace th::game
             const int w = 180, h = 34;
             return { getWidth() / 2 - w / 2, getHeight() / 2 - 10, w, h };
         }
+        juce::Rectangle<int> getPerksBtnRect() const noexcept
+        {
+            return { getWidth() / 2 - 50, getHeight() / 2 + 30, 100, 18 };
+        }
         juce::Rectangle<int> getRetireBtnRect() const noexcept
         {
             return { getWidth() - 66, getHeight() - HUD_BOTTOM_H + 3, 60, 14 };
         }
+        juce::Rectangle<int> getHelpBtnRect() const noexcept
+        {
+            // Positioned at the far right of the top HUD, just before drag handle
+            return { getWidth() - 34, 3, 14, 14 };
+        }
         juce::Rectangle<int> getBuildMenuRect() const noexcept
         {
-            // Positioned over the bottom half of the grid area
-            return { gridRect.getX() + 4, gridRect.getCentreY(),
-                     gridRect.getWidth() - 8, gridRect.getHeight() / 2 };
+            // v6.3: full-width menu over the grid so building cards can
+            // actually breathe (cost / income / HP visible per card).
+            return { 4, hudTopRect.getBottom() + 4,
+                     getWidth() - 8, gridRect.getHeight() - 4 };
         }
         juce::Rectangle<int> getEventBtnRect (bool a) const noexcept
         {
@@ -1416,7 +2165,22 @@ namespace th::game
         //======================================================================
         void drawMenu (juce::Graphics& g)
         {
-            // Title
+            // v6.3 — animated city scene behind the title (buildings, cars,
+            // moon + stars, clouds) so the menu isn't just text on gradient.
+            drawMenuCityScene (g);
+
+            // Title with animated gold glow
+            const float titlePulse = 0.5f + 0.5f * std::sin (
+                (float) juce::Time::currentTimeMillis() / 400.0f);
+            for (int halo = 6; halo > 0; --halo)
+            {
+                g.setColour (juce::Colour (0xFFFFEB3B).withAlpha (0.03f * titlePulse));
+                g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(),
+                                        18.0f + (float) halo * 0.4f, juce::Font::bold));
+                g.drawFittedText ("1017 EMPIRE",
+                                  getLocalBounds().withY (18).withHeight (24),
+                                  juce::Justification::centred, 1);
+            }
             g.setColour (juce::Colour (0xFFFFEB3B));
             g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 18.0f, juce::Font::bold));
             g.drawFittedText ("1017 EMPIRE",
@@ -1480,6 +2244,17 @@ namespace th::game
                               + "  .  PRESTIGE " + juce::String (save.prestige),
                               statsR, juce::Justification::centred, 2);
 
+            // v6.6 — UPGRADES button
+            {
+                const auto pb = getPerksBtnRect();
+                g.setColour (juce::Colour (0xFFC6FF00).withAlpha (0.85f));
+                g.fillRoundedRectangle (pb.toFloat(), 4.0f);
+                g.setColour (juce::Colour (0xFF0A1000));
+                g.drawRoundedRectangle (pb.toFloat(), 4.0f, 1.5f);
+                g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 9.0f, juce::Font::bold));
+                g.drawFittedText ("UPGRADES", pb, juce::Justification::centred, 1);
+            }
+
             // Unlocked building count
             int unlocked = 0;
             for (int i = 1; i < (int) BType::NUM_TYPES; ++i)
@@ -1490,6 +2265,208 @@ namespace th::game
                               + " BUILDINGS UNLOCKED",
                               getLocalBounds().withY (getHeight() - 14).withHeight (12),
                               juce::Justification::centred, 1);
+
+            // v6.6 — perk tree overlay (drawn on top of menu when opened)
+            if (perkTreeOpen) drawPerkTree (g);
+        }
+
+        void drawPerkTree (juce::Graphics& g)
+        {
+            g.setColour (juce::Colours::black.withAlpha (0.85f));
+            g.fillRect (getLocalBounds());
+
+            const auto card = getLocalBounds().withSizeKeepingCentre (440, 180);
+            g.setColour (juce::Colour (0xFF0A1000));
+            g.fillRoundedRectangle (card.toFloat(), 6.0f);
+            g.setColour (juce::Colour (0xFFFFEB3B));
+            g.drawRoundedRectangle (card.toFloat(), 6.0f, 1.5f);
+
+            // Title
+            g.setColour (juce::Colour (0xFFFFEB3B));
+            g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 11.0f, juce::Font::bold));
+            g.drawFittedText (juce::String ("PERM PERKS  ")
+                              + juce::String (save.legendPoints) + " LP",
+                              card.withHeight (16).translated (0, 4),
+                              juce::Justification::centred, 1);
+
+            const int n = (int) getPerks().size();
+            const int rowH = (card.getHeight() - 30) / n;
+            for (int i = 0; i < n; ++i)
+            {
+                const auto& p = getPerks()[(size_t) i];
+                const bool owned = (save.perkMask & (1 << i)) != 0;
+                const bool affordable = ! owned && save.legendPoints >= p.cost;
+                const auto row = juce::Rectangle<int> (
+                    card.getX() + 8, card.getY() + 24 + i * rowH,
+                    card.getWidth() - 16, rowH - 2);
+                g.setColour (owned ? juce::Colour (0xFF1A3300)
+                             : affordable ? juce::Colour (0xFF1A2500)
+                                           : juce::Colour (0xFF15151A));
+                g.fillRoundedRectangle (row.toFloat(), 3.0f);
+                g.setColour (owned ? juce::Colour (0xFFC6FF00)
+                             : affordable ? juce::Colour (0xFFFFEB3B)
+                                           : juce::Colour (0xFF555555));
+                g.drawRoundedRectangle (row.toFloat(), 3.0f, 1.0f);
+
+                // Perk name
+                g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 9.0f, juce::Font::bold));
+                g.drawFittedText (owned ? (juce::String ("OWNED   ") + p.name) : p.name,
+                                  row.withWidth (row.getWidth() - 60).reduced (6, 1),
+                                  juce::Justification::centredLeft, 1);
+                // Desc
+                g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 7.0f, juce::Font::plain));
+                g.setColour (juce::Colour (0xFFF1F8E9).withAlpha (0.8f));
+                g.drawFittedText (p.desc,
+                                  row.withWidth (row.getWidth() - 60).reduced (6, 1)
+                                     .translated (0, 9),
+                                  juce::Justification::centredLeft, 1);
+                // Cost badge right-aligned
+                g.setColour (owned ? juce::Colour (0xFF90A4AE)
+                             : affordable ? juce::Colour (0xFFC6FF00)
+                                           : juce::Colour (0xFFFF5252));
+                g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 9.0f, juce::Font::bold));
+                g.drawFittedText (owned ? juce::String ("+")
+                                         : (juce::String (p.cost) + " LP"),
+                                  row.withX (row.getRight() - 58).withWidth (54),
+                                  juce::Justification::centredRight, 1);
+            }
+
+            g.setColour (juce::Colour (0xFFCDDC39).withAlpha (0.6f));
+            g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 7.0f, juce::Font::plain));
+            g.drawFittedText ("tap outside to close",
+                              card.withY (card.getBottom() - 12).withHeight (12),
+                              juce::Justification::centred, 1);
+        }
+
+        // v6.3 — cinematic menu backdrop: skyline + cars + moon + clouds
+        void drawMenuCityScene (juce::Graphics& g)
+        {
+            const float phase = getDayNightPhase();
+            const bool isNight = (phase > 0.55f && phase < 0.95f);
+            const float tMs = (float) juce::Time::currentTimeMillis();
+
+            // Sky gradient
+            const juce::Colour top    = isNight ? juce::Colour (0xFF05070F)
+                                                 : juce::Colour (0xFF1A2A4A);
+            const juce::Colour bottom = isNight ? juce::Colour (0xFF140820)
+                                                 : juce::Colour (0xFF4A2030);
+            juce::ColourGradient sky (top, 0.0f, 0.0f,
+                                       bottom, 0.0f, (float) getHeight() * 0.75f, false);
+            g.setGradientFill (sky);
+            g.fillRect (0, 0, getWidth(), (int) ((float) getHeight() * 0.82f));
+
+            // Stars at night
+            if (isNight)
+            {
+                juce::Random starRng (7777);
+                for (int i = 0; i < 70; ++i)
+                {
+                    const int sx = starRng.nextInt (getWidth());
+                    const int sy = starRng.nextInt ((int) ((float) getHeight() * 0.55f));
+                    const float tw = 0.4f + 0.6f * std::sin (tMs / 500.0f + (float) i * 0.7f);
+                    g.setColour (juce::Colours::white.withAlpha (0.25f + 0.45f * tw));
+                    g.fillRect ((float) sx, (float) sy, 1.0f, 1.0f);
+                }
+                // Moon
+                g.setColour (juce::Colour (0xFFFFF9C4));
+                g.fillEllipse ((float) getWidth() - 40.0f, 16.0f, 20.0f, 20.0f);
+                g.setColour (juce::Colour (0xFFFFF59D).withAlpha (0.5f));
+                g.fillEllipse ((float) getWidth() - 44.0f, 12.0f, 28.0f, 28.0f);
+            }
+            else
+            {
+                // Sun
+                g.setColour (juce::Colour (0xFFFFEB3B));
+                g.fillEllipse ((float) getWidth() - 42.0f, 14.0f, 24.0f, 24.0f);
+                g.setColour (juce::Colour (0xFFFFEB3B).withAlpha (0.4f));
+                g.fillEllipse ((float) getWidth() - 48.0f, 8.0f, 36.0f, 36.0f);
+            }
+
+            // Drifting clouds
+            for (int i = 0; i < 5; ++i)
+            {
+                const float cx = std::fmod ((float) (i * 137) + tMs / 100.0f,
+                                             (float) getWidth() + 60.0f) - 30.0f;
+                const float cy = 10.0f + (float) (i * 7 % 20);
+                g.setColour (juce::Colours::white.withAlpha (isNight ? 0.1f : 0.22f));
+                g.fillRoundedRectangle (cx, cy, 30.0f, 6.0f, 3.0f);
+                g.fillRoundedRectangle (cx + 8.0f, cy - 3.0f, 18.0f, 6.0f, 3.0f);
+            }
+
+            // Background far skyline (deterministic buildings)
+            const int skylineY = (int) ((float) getHeight() * 0.74f);
+            for (int i = 0; i < 24; ++i)
+            {
+                const int bh = 30 + (i * 17) % 34;
+                const int bw = 22 + (i * 13) % 14;
+                const int bx = -10 + i * 22;
+                g.setColour (isNight ? juce::Colour (0xFF0A0F1A) : juce::Colour (0xFF15233A));
+                g.fillRect (bx, skylineY - bh, bw, bh);
+                // Windows
+                for (int wr = 0; wr < bh / 5; ++wr)
+                    for (int wc = 0; wc < bw / 6; ++wc)
+                    {
+                        const bool lit = isNight && ((i + wr + wc) * 3 % 7 != 0);
+                        g.setColour (lit ? juce::Colour (0xFFFFEB3B).withAlpha (0.75f)
+                                          : juce::Colour (0xFF263A52).withAlpha (0.6f));
+                        g.fillRect (bx + 2 + wc * 6, skylineY - bh + 2 + wr * 5, 2, 2);
+                    }
+                // Rooftop antenna on tall buildings
+                if (bh > 50)
+                {
+                    g.setColour (juce::Colour (0xFF546E7A));
+                    g.fillRect ((float) bx + (float) bw * 0.5f - 0.5f,
+                                (float) skylineY - (float) bh - 4.0f, 1.0f, 4.0f);
+                    if (isNight && ((tMs / 400.0f - (float) i) > 0.0f
+                                    && ((int) (tMs / 400.0f) % 2) == 0))
+                    {
+                        g.setColour (juce::Colour (0xFFFF5252));
+                        g.fillRect ((float) bx + (float) bw * 0.5f - 1.0f,
+                                    (float) skylineY - (float) bh - 5.0f, 2.0f, 2.0f);
+                    }
+                }
+            }
+
+            // Ground road
+            const int roadY = (int) ((float) getHeight() * 0.78f);
+            g.setColour (juce::Colour (0xFF1A1A1A));
+            g.fillRect (0, roadY, getWidth(), (int) ((float) getHeight() * 0.22f));
+            // Yellow dashes
+            g.setColour (juce::Colour (0xFFFFEB3B).withAlpha (0.7f));
+            for (int i = 0; i < getWidth() / 18 + 2; ++i)
+            {
+                const float dx = std::fmod ((float) (i * 18) - tMs / 30.0f,
+                                             (float) getWidth() + 18.0f);
+                g.fillRect (dx, (float) roadY + 10.0f, 10.0f, 2.0f);
+            }
+            // Cars driving (3 ambient)
+            for (int i = 0; i < 4; ++i)
+            {
+                const float speed = 90.0f + (float) (i * 35);
+                const float phaseX = std::fmod (tMs / (i % 2 == 0 ? -speed : speed)
+                                                 + (float) (i * 200),
+                                                 (float) getWidth() + 40.0f);
+                const float cx = (i % 2 == 0) ? phaseX : (float) getWidth() - phaseX;
+                const float cy = (float) roadY + 3.0f + (float) ((i * 3) % 5);
+                const juce::Colour cars[] = {
+                    juce::Colour (0xFFE53935), juce::Colour (0xFF1E88E5),
+                    juce::Colour (0xFFFFEB3B), juce::Colour (0xFFF5F5F5)
+                };
+                g.setColour (cars[i % 4]);
+                g.fillRect (cx, cy, 12.0f, 4.0f);
+                g.setColour (cars[i % 4].brighter (0.3f));
+                g.fillRect (cx + 1.0f, cy - 1.0f, 9.0f, 2.0f);
+                g.setColour (juce::Colour (0xFF0A1000));
+                g.fillRect (cx + 2.0f, cy, 2.0f, 1.0f);
+                g.fillRect (cx + 7.0f, cy, 2.0f, 1.0f);
+                if (isNight)
+                {
+                    // Headlight beam
+                    g.setColour (juce::Colour (0xFFFFEB3B).withAlpha (0.6f));
+                    const float hx = (i % 2 == 0) ? cx + 12.0f : cx - 4.0f;
+                    g.fillRect (hx, cy + 1.0f, 4.0f, 1.0f);
+                }
+            }
         }
 
         //======================================================================
@@ -1559,12 +2536,274 @@ namespace th::game
         {
             drawSkylineBackground (g);
             drawGrid (g);
+            drawSynergyLines (g);     // v6.4 — gold links between buffed buildings
+            drawDefenseRanges (g);
+            drawWorkers (g);
             drawParticles (g);
+            drawCoinFlights (g);      // v6.5 — gold coins flying to HUD on income
             drawOpps (g);
             drawWarnings (g);
+            drawBossHud (g);          // v6.5 — boss name + HP bar across top
             drawHUDTop (g);
             drawHUDBottom (g);
+            drawQuestHud (g);         // v6.5 — quest progress cards on the right
+            drawBigBanner (g);        // v6.5 — boss-down / unlock banner
             if (buildMenuOpen) drawBuildMenu (g);
+            if (tutorialHintFrames > 0 && ! buildMenuOpen) drawTutorialHint (g);
+            if (helpOpen) drawHelpOverlay (g);
+        }
+
+        // v6.5 — the gold banner used for unlocks + boss kills (shared)
+        void drawBigBanner (juce::Graphics& g)
+        {
+            if (bigBannerFrames <= 0 || bigBannerText.isEmpty()) return;
+            const float t    = (float) bigBannerFrames / 150.0f;
+            const float slide = juce::jmin (1.0f, (1.0f - t) * 5.0f);
+            const float fade  = juce::jmin (1.0f, t * 3.0f);
+            const float xOff  = (1.0f - slide) * 400.0f;
+            const auto box = juce::Rectangle<int> (
+                getWidth() / 2 - 180 + (int) xOff, 96, 360, 26);
+            const float pulse = 0.5f + 0.5f * std::sin (
+                (float) juce::Time::currentTimeMillis() / 200.0f);
+            for (int glow = 8; glow > 0; --glow)
+            {
+                g.setColour (juce::Colour (0xFFC6FF00).withAlpha (0.04f * pulse * fade));
+                g.drawRoundedRectangle (box.toFloat().expanded ((float) glow), 5.0f, 2.0f);
+            }
+            juce::ColourGradient bannerGrad (
+                juce::Colour (0xFFFFEE58).withAlpha (fade * 0.9f),
+                (float) box.getX(), (float) box.getY(),
+                juce::Colour (0xFFFFB300).withAlpha (fade * 0.9f),
+                (float) box.getX(), (float) box.getBottom(), false);
+            g.setGradientFill (bannerGrad);
+            g.fillRoundedRectangle (box.toFloat(), 5.0f);
+            g.setColour (juce::Colour (0xFF0A1000).withAlpha (fade));
+            g.drawRoundedRectangle (box.toFloat(), 5.0f, 2.0f);
+            g.setColour (juce::Colour (0xFF0A1000).withAlpha (fade));
+            g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::bold));
+            g.drawFittedText (bigBannerText, box, juce::Justification::centred, 1);
+        }
+
+        // v6.5 — live boss HP bar across the top edge during a boss raid
+        void drawBossHud (juce::Graphics& g)
+        {
+            if (save.bossAlive == 0 || save.bossCurrentHp <= 0) return;
+            const auto bar = juce::Rectangle<int> (40, HUD_TOP_H + 2,
+                                                    getWidth() - 80, 8);
+            g.setColour (juce::Colour (0xFF0A1000).withAlpha (0.8f));
+            g.fillRoundedRectangle (bar.toFloat(), 2.0f);
+            const float hpF = (float) save.bossCurrentHp / (float) juce::jmax (1, save.bossTotalHp);
+            juce::ColourGradient grad (
+                juce::Colour (0xFFFF1744), (float) bar.getX(), 0.0f,
+                juce::Colour (0xFF6A1B9A), (float) bar.getRight(), 0.0f, false);
+            g.setGradientFill (grad);
+            g.fillRoundedRectangle (bar.toFloat().withWidth ((float) bar.getWidth() * hpF), 2.0f);
+            g.setColour (juce::Colour (0xFFFFEB3B).withAlpha (0.9f));
+            g.drawRoundedRectangle (bar.toFloat(), 2.0f, 1.0f);
+            g.setColour (juce::Colour (0xFFFFEB3B));
+            g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 8.0f, juce::Font::bold));
+            g.drawFittedText (save.bossName + "   "
+                              + juce::String (save.bossCurrentHp) + " / "
+                              + juce::String (save.bossTotalHp),
+                              bar, juce::Justification::centred, 1);
+        }
+
+        // v6.5 — active quest cards (right side of viewport during Playing)
+        void drawQuestHud (juce::Graphics& g)
+        {
+            const int cardW = 126, cardH = 22;
+            for (int slot = 0; slot < 2; ++slot)
+            {
+                const int qIdx = save.questIdx[(size_t) slot];
+                if (qIdx < 0) continue;
+                const auto& q = getQuests()[(size_t) qIdx];
+                const bool done = save.questDone[(size_t) slot];
+                const auto r = juce::Rectangle<int> (
+                    getWidth() - cardW - 4,
+                    HUD_TOP_H + 14 + slot * (cardH + 3),
+                    cardW, cardH);
+                g.setColour (juce::Colour (0xFF0A1000).withAlpha (0.8f));
+                g.fillRoundedRectangle (r.toFloat(), 3.0f);
+                g.setColour (done ? juce::Colour (0xFFC6FF00) : juce::Colour (0xFFFFEB3B));
+                g.drawRoundedRectangle (r.toFloat(), 3.0f, 1.0f);
+                // Name
+                g.setColour (done ? juce::Colour (0xFFC6FF00) : juce::Colour (0xFFFFEB3B));
+                g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 7.0f, juce::Font::bold));
+                g.drawFittedText (q.name,
+                                  r.withHeight (9).translated (0, 1).reduced (4, 0),
+                                  juce::Justification::centredLeft, 1);
+                // Desc
+                g.setColour (juce::Colour (0xFFF1F8E9).withAlpha (0.9f));
+                g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 6.0f, juce::Font::plain));
+                g.drawFittedText (q.desc,
+                                  r.withHeight (7).translated (0, 8).reduced (4, 0),
+                                  juce::Justification::centredLeft, 1);
+                // Progress bar (inline at the bottom of the card)
+                const auto prog = juce::Rectangle<int> (r.getX() + 4, r.getBottom() - 5,
+                                                        r.getWidth() - 8, 3);
+                g.setColour (juce::Colour (0xFF1A2500));
+                g.fillRect (prog);
+                const float f = done ? 1.0f
+                    : juce::jlimit (0.0f, 1.0f,
+                                    (float) save.questProgress[(size_t) slot]
+                                    / (float) juce::jmax (1, q.target));
+                g.setColour (done ? juce::Colour (0xFFC6FF00) : juce::Colour (0xFFFFEB3B));
+                g.fillRect ((float) prog.getX(), (float) prog.getY(),
+                            (float) prog.getWidth() * f, (float) prog.getHeight());
+            }
+        }
+
+        // v6.4 — draw gold lines between synergy-linked buildings so the
+        // player SEES which tiles are buffing each other.
+        //   RADIO     -> all adjacent income buildings get +25%
+        //   BOOTH     -> adjacent STUDIO gets +20%
+        //   VENUE     -> adjacent BARBER boosts hype
+        void drawSynergyLines (juce::Graphics& g)
+        {
+            const float pulse = 0.55f + 0.45f * std::sin (
+                (float) save.runTick * 0.2f);
+
+            auto drawLink = [&] (int c1, int r1, int c2, int r2, juce::Colour col)
+            {
+                const auto a = tileToScreen (c1, r1);
+                const auto b = tileToScreen (c2, r2);
+                const float ax = a.x + TILE_W * 0.5f;
+                const float ay = a.y + TILE_H * 0.5f;
+                const float bx = b.x + TILE_W * 0.5f;
+                const float by = b.y + TILE_H * 0.5f;
+                // Soft halo
+                g.setColour (col.withAlpha (0.2f * pulse));
+                g.drawLine (ax, ay, bx, by, 3.0f);
+                // Core line
+                g.setColour (col.withAlpha (0.8f * pulse));
+                g.drawLine (ax, ay, bx, by, 1.2f);
+                // Small gold dot in the middle
+                g.setColour (juce::Colour (0xFFFFEB3B).withAlpha (pulse));
+                g.fillEllipse ((ax + bx) * 0.5f - 1.5f,
+                               (ay + by) * 0.5f - 1.5f, 3.0f, 3.0f);
+            };
+
+            const std::array<std::pair<int,int>, 4> dirs = {{
+                {1, 0}, {0, 1}, {1, 1}, {1, -1}   // include diagonals for full net
+            }};
+            for (int c = 0; c < GRID_W; ++c)
+                for (int r = 0; r < GRID_H; ++r)
+                {
+                    const auto& t = save.grid[(size_t) c][(size_t) r];
+                    if (t.type == BType::Empty || t.hp <= 0) continue;
+                    for (const auto& d : dirs)
+                    {
+                        const int nc = c + d.first;
+                        const int nr = r + d.second;
+                        if (nc < 0 || nc >= GRID_W || nr < 0 || nr >= GRID_H) continue;
+                        // Only orthogonal for actual gameplay buffs (diagonal
+                        // buffs get drawn but the maths is orthogonal-only);
+                        // we still want to preview the links clearly, so we
+                        // only emit lines for orthogonal pairs here.
+                        if (std::abs (d.first) + std::abs (d.second) != 1) continue;
+                        const auto& u = save.grid[(size_t) nc][(size_t) nr];
+                        if (u.type == BType::Empty || u.hp <= 0) continue;
+
+                        const bool radioBoost = (t.type == BType::Radio
+                                                 && getBuildings()[(size_t) u.type].category == 0)
+                                              || (u.type == BType::Radio
+                                                 && getBuildings()[(size_t) t.type].category == 0);
+                        const bool boothStudio = (t.type == BType::Booth && u.type == BType::Studio)
+                                               || (t.type == BType::Studio && u.type == BType::Booth);
+                        const bool venueBarber = (t.type == BType::Venue && u.type == BType::Barber)
+                                               || (t.type == BType::Barber && u.type == BType::Venue);
+
+                        if (radioBoost)   drawLink (c, r, nc, nr, juce::Colour (0xFF43A047));
+                        else if (boothStudio) drawLink (c, r, nc, nr, juce::Colour (0xFFEF6C00));
+                        else if (venueBarber) drawLink (c, r, nc, nr, juce::Colour (0xFFFB8C00));
+                    }
+                }
+        }
+
+        // Subtle range circles around TURRETS so the user can SEE what they
+        // protect. Drawn under the actors so opps draw on top.
+        void drawDefenseRanges (juce::Graphics& g)
+        {
+            for (int c = 0; c < GRID_W; ++c)
+                for (int r = 0; r < GRID_H; ++r)
+                {
+                    const auto& t = save.grid[(size_t) c][(size_t) r];
+                    if (t.type != BType::Turret || t.hp <= 0) continue;
+                    const auto p = tileToScreen (c, r);
+                    const float cx = p.x + TILE_W * 0.5f;
+                    const float cy = p.y + TILE_H * 0.5f;
+                    // Range = 2.5 tiles radius
+                    const float rr = 2.5f * TILE_W;
+                    g.setColour (juce::Colour (0xFFC6FF00).withAlpha (0.08f));
+                    g.fillEllipse (cx - rr, cy - rr, rr * 2.0f, rr * 2.0f);
+                    g.setColour (juce::Colour (0xFFC6FF00).withAlpha (0.25f));
+                    g.drawEllipse (cx - rr, cy - rr, rr * 2.0f, rr * 2.0f, 1.0f);
+                }
+        }
+
+        // v6.2 first-run tooltip: gentle instruction overlay in the middle
+        // that fades out after ~5 s or on first click.
+        void drawTutorialHint (juce::Graphics& g)
+        {
+            const float fade = juce::jlimit (0.0f, 1.0f, (float) tutorialHintFrames / 60.0f);
+            const auto r = juce::Rectangle<int> (getWidth() / 2 - 140, getHeight() / 2 - 14,
+                                                  280, 28);
+            g.setColour (juce::Colour (0xFF0A1000).withAlpha (0.8f * fade));
+            g.fillRoundedRectangle (r.toFloat(), 4.0f);
+            g.setColour (juce::Colour (0xFFFFEB3B).withAlpha (fade));
+            g.drawRoundedRectangle (r.toFloat(), 4.0f, 1.0f);
+            g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 8.0f, juce::Font::bold));
+            g.drawFittedText (
+                "TAP GRASS TO BUILD   .   TAP A BUILDING TO UPGRADE   .   ? FOR HELP",
+                r, juce::Justification::centred, 1);
+        }
+
+        // v6.2 — big help overlay with the whole gameplay loop explained.
+        void drawHelpOverlay (juce::Graphics& g)
+        {
+            g.setColour (juce::Colours::black.withAlpha (0.85f));
+            g.fillRect (getLocalBounds());
+
+            const auto card = getLocalBounds().withSizeKeepingCentre (430, 180);
+            g.setColour (juce::Colour (0xFF0A1000));
+            g.fillRoundedRectangle (card.toFloat(), 6.0f);
+            g.setColour (juce::Colour (0xFFFFEB3B));
+            g.drawRoundedRectangle (card.toFloat(), 6.0f, 1.5f);
+
+            g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 11.0f, juce::Font::bold));
+            g.setColour (juce::Colour (0xFFFFEB3B));
+            g.drawFittedText ("HOW TO PLAY",
+                              card.withHeight (16).translated (0, 4),
+                              juce::Justification::centred, 1);
+
+            struct Line { const char* text; juce::Colour col; };
+            const std::array<Line, 10> lines = {{
+                { "1. TAP A GRASS TILE   ->  build menu  ->  pick a building", juce::Colour (0xFFC6FF00) },
+                { "2. TAP A BUILT TILE   ->  UPGRADE (+lvl) or DEMOLISH (refund)", juce::Colour (0xFFC6FF00) },
+                { "3. BUILDINGS (gold)   ->  income/sec (STUDIO, LABEL, MERCH, CRYPTO...)", juce::Colour (0xFFFFEE58) },
+                { "4. TAP THE LIGHTNING  ->  fire building's active ability (broadcast, gala...)", juce::Colour (0xFFFFEB3B) },
+                { "5. GOLD LINKS         ->  synergy: adjacent buildings boost each other", juce::Colour (0xFF43A047) },
+                { "6. DEFENSE (gray)     ->  TURRET auto-shoots, WALL absorbs, ARMORY soaks", juce::Colour (0xFFB0BEC5) },
+                { "7. OPPS - red dot=mob, diamond=DRONE (flies), masked=THIEF (steals cash)", juce::Colour (0xFFFF5252) },
+                { "8. RAIDS              ->  red arrow = opps spawn in 5s from that edge", juce::Colour (0xFFFF5252) },
+                { "9. EMPIRE HP = 0      ->  run ends. Every run unlocks a new building", juce::Colour (0xFFFF5252) },
+                { "10. RETIRE             ->  bank legend points + keep all perm progression", juce::Colour (0xFFCDDC39) }
+            }};
+            g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 7.5f, juce::Font::plain));
+            for (int i = 0; i < (int) lines.size(); ++i)
+            {
+                g.setColour (lines[(size_t) i].col);
+                g.drawFittedText (lines[(size_t) i].text,
+                                  card.withY (card.getY() + 20 + i * 14)
+                                       .withHeight (12).reduced (10, 0),
+                                  juce::Justification::centredLeft, 1);
+            }
+
+            g.setColour (juce::Colour (0xFFCDDC39).withAlpha (0.7f));
+            g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 7.0f, juce::Font::plain));
+            g.drawFittedText ("tap anywhere to close",
+                              card.withY (card.getBottom() - 14).withHeight (12),
+                              juce::Justification::centred, 1);
         }
 
         //======================================================================
@@ -1630,49 +2869,180 @@ namespace th::game
 
         void drawGrid (juce::Graphics& g)
         {
-            // Ground tint per tile (subtle variance)
+            // v6.2 City-Skylines-style ground: organic grass base with per-tile
+            // colour noise + procedural decorations (trees, bushes, flowers,
+            // stones) on empty tiles so the board doesn't look like a chess
+            // board. Hazards draw as rubble instead of stark red Xs.
             for (int c = 0; c < GRID_W; ++c)
                 for (int r = 0; r < GRID_H; ++r)
                 {
                     const auto p = tileToScreen (c, r);
                     const juce::Rectangle<float> tr (p.x, p.y, TILE_W - 1.0f, TILE_H - 1.0f);
                     const auto& t = save.grid[(size_t) c][(size_t) r];
+                    // Deterministic per-tile hash — used for ground tint,
+                    // decoration layout, stone positions.
+                    const unsigned int hash = (unsigned) ((c * 73856093) ^ (r * 19349663)) ^ 0xB5297A4Du;
 
                     if (t.hazard)
                     {
-                        g.setColour (juce::Colour (0xFF1A0A0A));
-                        g.fillRect (tr);
-                        // X pattern
-                        g.setColour (juce::Colour (0xFFB71C1C).withAlpha (0.4f));
-                        g.drawLine (tr.getX() + 2, tr.getY() + 2,
-                                     tr.getRight() - 2, tr.getBottom() - 2, 1.0f);
-                        g.drawLine (tr.getRight() - 2, tr.getY() + 2,
-                                     tr.getX() + 2, tr.getBottom() - 2, 1.0f);
+                        drawHazardTile (g, tr, hash);
                         continue;
                     }
 
-                    // Base tile (slightly alternating for chessboard feel)
-                    g.setColour (((c + r) % 2 == 0) ? juce::Colour (0xFF14201F)
-                                                     : juce::Colour (0xFF101A19));
-                    g.fillRect (tr);
+                    // Grass ground
+                    drawGrassTile (g, tr, hash);
 
-                    if (t.type != BType::Empty) drawTile (g, c, r, t);
+                    if (t.type != BType::Empty)
+                    {
+                        // Dirt plot under the building (distinguishes from grass)
+                        g.setColour (juce::Colour (0xFF2B211A).withAlpha (0.65f));
+                        g.fillRect (tr.reduced (1.5f, 1.0f));
+                        drawTile (g, c, r, t);
+                    }
+                    else
+                    {
+                        // Decorative flora / stones on empty tiles
+                        drawEmptyTileDeco (g, tr, hash);
+                    }
                 }
 
-            // Grid lines
-            g.setColour (juce::Colour (0xFFCDDC39).withAlpha (0.12f));
-            for (int c = 0; c <= GRID_W; ++c)
-            {
-                const float x = tileToScreen (c, 0).x;
-                g.fillRect (x, (float) gridRect.getCentreY() - (GRID_H * TILE_H) * 0.5f,
+            // v6.2 — subtle road texture running through the grid (horizontal
+            // lines between rows, vertical between columns) gives the city
+            // feel without the chess-board contrast.
+            g.setColour (juce::Colour (0xFF4A3B2A).withAlpha (0.35f));
+            const float gx0 = (float) gridRect.getCentreX() - (GRID_W * TILE_W) * 0.5f;
+            const float gy0 = (float) gridRect.getCentreY() - (GRID_H * TILE_H) * 0.5f;
+            for (int c = 1; c < GRID_W; ++c)
+                g.fillRect (gx0 + (float) c * TILE_W - 0.5f, gy0,
                             1.0f, (float) GRID_H * TILE_H);
-            }
-            for (int r = 0; r <= GRID_H; ++r)
+            for (int r = 1; r < GRID_H; ++r)
+                g.fillRect (gx0, gy0 + (float) r * TILE_H - 0.5f,
+                            (float) GRID_W * TILE_W, 1.0f);
+
+            // Outer frame — gold border with corner accents
+            const juce::Rectangle<float> frame (gx0 - 1.0f, gy0 - 1.0f,
+                                                GRID_W * TILE_W + 2.0f,
+                                                GRID_H * TILE_H + 2.0f);
+            g.setColour (juce::Colour (0xFFFFEB3B).withAlpha (0.55f));
+            g.drawRect (frame, 1.5f);
+            // Corner bolts
+            g.setColour (juce::Colour (0xFFFFD700));
+            for (int i = 0; i < 2; ++i)
+                for (int j = 0; j < 2; ++j)
+                {
+                    const float cx = (i == 0) ? frame.getX() : frame.getRight() - 3.0f;
+                    const float cy = (j == 0) ? frame.getY() : frame.getBottom() - 3.0f;
+                    g.fillRect (cx, cy, 3.0f, 3.0f);
+                }
+        }
+
+        void drawGrassTile (juce::Graphics& g, juce::Rectangle<float> tr, unsigned int hash)
+        {
+            // Grass colour varies slightly per tile (dark moss green, warmer
+            // in some tiles so the grid doesn't read as uniform).
+            const float tint = (float) (hash & 0x3F) / 63.0f;
+            const juce::Colour a (0xFF1E3D2F), b (0xFF2E5340);
+            g.setColour (a.interpolatedWith (b, tint));
+            g.fillRect (tr);
+
+            // A few small grass tufts (2-3 pixels) scattered.
+            for (int i = 0; i < 4; ++i)
             {
-                const float y = tileToScreen (0, r).y;
-                g.fillRect ((float) gridRect.getCentreX() - (GRID_W * TILE_W) * 0.5f,
-                            y, (float) GRID_W * TILE_W, 1.0f);
+                if ((int) ((hash >> (unsigned) (i * 3)) & 0x7Fu) < 55) continue;
+                const float px = tr.getX() + 2.0f
+                    + (float) ((hash >> (unsigned) (i * 5)) % (unsigned) (int) (tr.getWidth() - 4.0f));
+                const float py = tr.getY() + 2.0f
+                    + (float) ((hash >> (unsigned) (i * 7)) % (unsigned) (int) (tr.getHeight() - 4.0f));
+                g.setColour (juce::Colour (0xFF3A6B4A).withAlpha (0.7f));
+                g.fillRect (px, py, 2.0f, 1.0f);
             }
+        }
+
+        void drawEmptyTileDeco (juce::Graphics& g, juce::Rectangle<float> tr, unsigned int hash)
+        {
+            // Roll a rare decoration — trees/bushes are ~10% each, stones ~6%.
+            const int roll = (int) (hash >> 12) % 100;
+            if (roll < 8)        drawTreeDeco (g, tr);
+            else if (roll < 18)  drawBushDeco (g, tr);
+            else if (roll < 24)  drawFlowerDeco (g, tr);
+            else if (roll < 30)  drawStoneDeco (g, tr, hash);
+        }
+
+        void drawTreeDeco (juce::Graphics& g, juce::Rectangle<float> tr)
+        {
+            const float cx = tr.getCentreX();
+            const float cy = tr.getCentreY() + 2.0f;
+            // Shadow
+            g.setColour (juce::Colour (0xFF000000).withAlpha (0.25f));
+            g.fillEllipse (cx - 3.0f, cy + 4.0f, 7.0f, 2.0f);
+            // Trunk
+            g.setColour (juce::Colour (0xFF4E342E));
+            g.fillRect (cx - 1.0f, cy - 2.0f, 2.0f, 6.0f);
+            // Leaves (two layers for depth)
+            g.setColour (juce::Colour (0xFF1B5E20));
+            g.fillEllipse (cx - 4.0f, cy - 7.0f, 8.0f, 7.0f);
+            g.setColour (juce::Colour (0xFF2E7D32));
+            g.fillEllipse (cx - 3.0f, cy - 6.0f, 6.0f, 5.0f);
+            // Highlight dot
+            g.setColour (juce::Colour (0xFF66BB6A));
+            g.fillRect (cx - 2.0f, cy - 5.0f, 1.5f, 1.5f);
+        }
+
+        void drawBushDeco (juce::Graphics& g, juce::Rectangle<float> tr)
+        {
+            const float cx = tr.getCentreX();
+            const float cy = tr.getCentreY() + 3.0f;
+            g.setColour (juce::Colour (0xFF000000).withAlpha (0.2f));
+            g.fillEllipse (cx - 5.0f, cy + 1.0f, 10.0f, 2.0f);
+            g.setColour (juce::Colour (0xFF1B5E20));
+            g.fillEllipse (cx - 5.0f, cy - 2.0f, 10.0f, 5.0f);
+            g.setColour (juce::Colour (0xFF2E7D32));
+            g.fillEllipse (cx - 3.0f, cy - 3.0f, 6.0f, 3.5f);
+        }
+
+        void drawFlowerDeco (juce::Graphics& g, juce::Rectangle<float> tr)
+        {
+            const float cx = tr.getCentreX();
+            const float cy = tr.getCentreY() + 4.0f;
+            g.setColour (juce::Colour (0xFF2E7D32));
+            g.fillRect (cx - 0.5f, cy - 4.0f, 1.0f, 5.0f);
+            g.setColour (juce::Colour (0xFFFFEB3B));
+            g.fillEllipse (cx - 1.5f, cy - 5.0f, 3.0f, 3.0f);
+            g.setColour (juce::Colour (0xFFFB8C00));
+            g.fillRect (cx, cy - 4.0f, 1.0f, 1.0f);
+        }
+
+        void drawStoneDeco (juce::Graphics& g, juce::Rectangle<float> tr, unsigned int hash)
+        {
+            const float cx = tr.getCentreX()
+                + (float) (((int) (hash >> 3) & 0x7) - 3);
+            const float cy = tr.getCentreY() + 3.0f;
+            g.setColour (juce::Colour (0xFF000000).withAlpha (0.25f));
+            g.fillEllipse (cx - 3.0f, cy + 1.0f, 6.0f, 2.0f);
+            g.setColour (juce::Colour (0xFF757575));
+            g.fillEllipse (cx - 3.0f, cy - 2.0f, 6.0f, 4.0f);
+            g.setColour (juce::Colour (0xFF9E9E9E));
+            g.fillEllipse (cx - 2.0f, cy - 2.0f, 3.0f, 2.0f);
+        }
+
+        void drawHazardTile (juce::Graphics& g, juce::Rectangle<float> tr, unsigned int hash)
+        {
+            // Rubble-looking tile: dark ash + scattered broken stones
+            g.setColour (juce::Colour (0xFF1A120A));
+            g.fillRect (tr);
+            for (int i = 0; i < 6; ++i)
+            {
+                const float px = tr.getX() + 2.0f
+                    + (float) ((hash >> (unsigned) (i * 3)) % (unsigned) (int) (tr.getWidth() - 4.0f));
+                const float py = tr.getY() + 2.0f
+                    + (float) ((hash >> (unsigned) (i * 5)) % (unsigned) (int) (tr.getHeight() - 4.0f));
+                g.setColour (juce::Colour (0xFF4E342E).withAlpha (0.8f));
+                g.fillRect (px, py, 2.0f, 1.5f);
+            }
+            // Subtle red crack
+            g.setColour (juce::Colour (0xFFB71C1C).withAlpha (0.25f));
+            g.drawLine (tr.getX() + 4.0f, tr.getY() + 4.0f,
+                        tr.getRight() - 4.0f, tr.getBottom() - 4.0f, 0.8f);
         }
 
         void drawTile (juce::Graphics& g, int c, int r, const Tile& t)
@@ -1741,6 +3111,46 @@ namespace th::game
             g.fillRect (bx, by, bw, 1.5f);
             g.setColour (juce::Colour (0xFFFF5252).interpolatedWith (juce::Colour (0xFFC6FF00), hpF));
             g.fillRect (bx, by, bw * hpF, 1.5f);
+
+            // v6.4 — active ability ⚡ button (top-right of the tile)
+            if (buildingHasAbility (t.type) && t.hp > 0)
+            {
+                const auto abtn = getAbilityBtnRect (c, r);
+                const bool ready = (t.abilityCd <= 0.0f);
+                const float pulse = 0.5f + 0.5f * std::sin ((float) save.runTick * 0.35f);
+                const juce::Colour fill = ready
+                    ? juce::Colour (0xFFC6FF00).withAlpha (0.7f + 0.3f * pulse)
+                    : juce::Colour (0xFF455A64).withAlpha (0.75f);
+                g.setColour (fill);
+                g.fillRoundedRectangle (abtn.toFloat(), 2.0f);
+                g.setColour (juce::Colour (0xFF0A1000));
+                g.drawRoundedRectangle (abtn.toFloat(), 2.0f, 0.8f);
+                // Lightning bolt glyph (mini path)
+                juce::Path bolt;
+                const float ax = (float) abtn.getX();
+                const float ay = (float) abtn.getY();
+                bolt.startNewSubPath (ax + 5.0f, ay + 1.5f);
+                bolt.lineTo          (ax + 3.0f, ay + 5.0f);
+                bolt.lineTo          (ax + 5.0f, ay + 5.0f);
+                bolt.lineTo          (ax + 4.0f, ay + 8.5f);
+                bolt.lineTo          (ax + 7.0f, ay + 4.5f);
+                bolt.lineTo          (ax + 5.0f, ay + 4.5f);
+                bolt.lineTo          (ax + 6.0f, ay + 1.5f);
+                bolt.closeSubPath();
+                g.setColour (ready ? juce::Colour (0xFF0A1000) : juce::Colour (0xFF90A4AE));
+                g.fillPath (bolt);
+                // Cooldown ring (visible arc on the right)
+                if (! ready)
+                {
+                    const float maxCd = getAbilityCooldownFor (t.type);
+                    const float frac = juce::jlimit (0.0f, 1.0f, 1.0f - t.abilityCd / maxCd);
+                    g.setColour (juce::Colour (0xFFFFEB3B).withAlpha (0.9f));
+                    g.fillRect ((float) abtn.getX(),
+                                (float) abtn.getBottom() - 1.5f,
+                                (float) abtn.getWidth() * frac,
+                                1.5f);
+                }
+            }
         }
 
         //======================================================================
@@ -2134,24 +3544,92 @@ namespace th::game
                 const auto p = tileToScreen (0, 0);
                 const float sx = p.x + o.x * TILE_W + TILE_W * 0.5f;
                 const float sy = p.y + o.y * TILE_H + TILE_H * 0.5f;
-                const juce::Colour col = o.type == 2 ? juce::Colour (0xFF6A1B9A)
-                                         : o.type == 1 ? juce::Colour (0xFFB71C1C)
-                                                        : juce::Colour (0xFFE53935);
-                g.setColour (col);
-                g.fillEllipse (sx - 5.0f, sy - 5.0f, 10.0f, 10.0f);
-                g.setColour (juce::Colour (0xFF0A1000));
-                g.drawEllipse (sx - 5.0f, sy - 5.0f, 10.0f, 10.0f, 1.0f);
-                // Red eyes
-                g.setColour (juce::Colour (0xFFFF5252));
-                g.fillRect (sx - 2.0f, sy - 1.0f, 1.0f, 1.0f);
-                g.fillRect (sx + 1.0f, sy - 1.0f, 1.0f, 1.0f);
-                // Crown for boss
-                if (o.type == 2)
+
+                // v6.4 — specialised sprites per opp type
+                if (o.type == 3)
                 {
-                    g.setColour (juce::Colour (0xFFFFD700));
-                    g.fillRect (sx - 4.0f, sy - 8.0f, 8.0f, 2.0f);
+                    // DRONE: diamond body + spinning propellers
+                    const float spin = (float) save.runTick * 0.9f;
+                    // Shadow under drone (suggests flying)
+                    g.setColour (juce::Colour (0xFF000000).withAlpha (0.5f));
+                    g.fillEllipse (sx - 4.0f, sy + 5.0f, 8.0f, 2.0f);
+                    // Body
+                    juce::Path diamond;
+                    diamond.addQuadrilateral (sx, sy - 4.0f,
+                                              sx + 4.0f, sy,
+                                              sx, sy + 4.0f,
+                                              sx - 4.0f, sy);
+                    g.setColour (juce::Colour (0xFF263238));
+                    g.fillPath (diamond);
+                    g.setColour (juce::Colour (0xFFFF1744));
+                    g.fillRect (sx - 1.0f, sy - 1.0f, 2.0f, 2.0f); // red core LED
+                    // Propellers (4 corners, spinning)
+                    for (int k = 0; k < 4; ++k)
+                    {
+                        const float kx = (k % 2 == 0 ? -5.0f : 5.0f);
+                        const float ky = (k < 2 ? -4.0f : 4.0f);
+                        const float r2 = 2.0f + 0.5f * std::sin (spin + (float) k);
+                        g.setColour (juce::Colour (0xFF90A4AE).withAlpha (0.7f));
+                        g.drawEllipse (sx + kx - r2, sy + ky - 0.5f, r2 * 2.0f, 1.5f, 0.8f);
+                    }
                 }
-                // HP bar
+                else if (o.type == 5)
+                {
+                    // BOMBER: black round bomb with a lit fuse
+                    g.setColour (juce::Colour (0xFF212121));
+                    g.fillEllipse (sx - 5.0f, sy - 5.0f, 10.0f, 10.0f);
+                    // Fuse
+                    g.setColour (juce::Colour (0xFF6D4C41));
+                    g.fillRect (sx - 0.5f, sy - 9.0f, 1.0f, 4.0f);
+                    // Flickering flame
+                    const bool flick = ((juce::Time::currentTimeMillis() / 80) % 2) == 0;
+                    g.setColour (flick ? juce::Colour (0xFFFFEB3B) : juce::Colour (0xFFFF5252));
+                    g.fillEllipse (sx - 1.5f, sy - 11.0f, 3.0f, 3.0f);
+                    // Skull/X on body
+                    g.setColour (juce::Colour (0xFFFFEB3B));
+                    g.setFont (juce::Font (8.0f, juce::Font::bold));
+                    g.drawText ("X", juce::Rectangle<int> ((int) sx - 5, (int) sy - 4, 10, 8),
+                                juce::Justification::centred);
+                }
+                else if (o.type == 4)
+                {
+                    // THIEF: hooded masked figure, moneybag
+                    g.setColour (juce::Colour (0xFF212121));
+                    g.fillRect (sx - 3.5f, sy - 5.0f, 7.0f, 5.0f);  // hood
+                    g.setColour (juce::Colour (0xFFE0E0E0));
+                    g.fillRect (sx - 1.5f, sy - 3.0f, 3.0f, 1.0f);  // mask eye slit
+                    g.setColour (juce::Colour (0xFF424242));
+                    g.fillRect (sx - 4.0f, sy, 8.0f, 4.0f);         // torso
+                    // $$ bag
+                    g.setColour (juce::Colour (0xFFFFF176));
+                    g.fillEllipse (sx + 2.0f, sy + 1.0f, 4.0f, 4.0f);
+                    g.setColour (juce::Colour (0xFF0A1000));
+                    g.setFont (juce::Font (6.0f, juce::Font::bold));
+                    g.drawText ("$", juce::Rectangle<int> ((int) sx + 2, (int) sy + 1, 4, 4),
+                                juce::Justification::centred);
+                }
+                else
+                {
+                    const juce::Colour col = o.type == 2 ? juce::Colour (0xFF6A1B9A)
+                                             : o.type == 1 ? juce::Colour (0xFFB71C1C)
+                                                            : juce::Colour (0xFFE53935);
+                    g.setColour (col);
+                    g.fillEllipse (sx - 5.0f, sy - 5.0f, 10.0f, 10.0f);
+                    g.setColour (juce::Colour (0xFF0A1000));
+                    g.drawEllipse (sx - 5.0f, sy - 5.0f, 10.0f, 10.0f, 1.0f);
+                    // Red eyes
+                    g.setColour (juce::Colour (0xFFFF5252));
+                    g.fillRect (sx - 2.0f, sy - 1.0f, 1.0f, 1.0f);
+                    g.fillRect (sx + 1.0f, sy - 1.0f, 1.0f, 1.0f);
+                    // Boss crown
+                    if (o.type == 2)
+                    {
+                        g.setColour (juce::Colour (0xFFFFD700));
+                        g.fillRect (sx - 4.0f, sy - 8.0f, 8.0f, 2.0f);
+                    }
+                }
+
+                // HP bar (shared)
                 const float hpF = juce::jlimit (0.0f, 1.0f, (float) o.hp / (float) o.maxHp);
                 g.setColour (juce::Colour (0xFF0A1000));
                 g.fillRect (sx - 5.0f, sy - 9.0f, 10.0f, 1.5f);
@@ -2164,21 +3642,75 @@ namespace th::game
         {
             for (const auto& w : warnings)
             {
-                const float blink = std::sin ((float) save.runTick * 0.5f);
-                if (blink < 0.0f) continue;
+                const float blinkPhase = std::sin ((float) save.runTick * 0.6f);
+                const bool  blinkOn = blinkPhase > 0.0f;
+
                 juce::String edgeName;
                 juce::Rectangle<int> edgeR;
+                juce::Point<float> arrowFrom, arrowTo;
                 switch (w.edge)
                 {
-                    case 0: edgeName = "TOP";    edgeR = juce::Rectangle<int> (gridRect.getX(),    gridRect.getY(),    gridRect.getWidth(), 4); break;
-                    case 1: edgeName = "RIGHT";  edgeR = juce::Rectangle<int> (gridRect.getRight() - 4, gridRect.getY(), 4, gridRect.getHeight()); break;
-                    case 2: edgeName = "BOTTOM"; edgeR = juce::Rectangle<int> (gridRect.getX(),    gridRect.getBottom() - 4, gridRect.getWidth(), 4); break;
-                    default:edgeName = "LEFT";   edgeR = juce::Rectangle<int> (gridRect.getX(),    gridRect.getY(),    4, gridRect.getHeight()); break;
+                    case 0:
+                        edgeName = "NORTH";
+                        edgeR = juce::Rectangle<int> (gridRect.getX(), gridRect.getY(),
+                                                       gridRect.getWidth(), 4);
+                        arrowFrom = { (float) gridRect.getCentreX(), (float) gridRect.getY() - 8.0f };
+                        arrowTo   = { (float) gridRect.getCentreX(), (float) gridRect.getY() + 4.0f };
+                        break;
+                    case 1:
+                        edgeName = "EAST";
+                        edgeR = juce::Rectangle<int> (gridRect.getRight() - 4, gridRect.getY(),
+                                                       4, gridRect.getHeight());
+                        arrowFrom = { (float) gridRect.getRight() + 8.0f, (float) gridRect.getCentreY() };
+                        arrowTo   = { (float) gridRect.getRight() - 4.0f, (float) gridRect.getCentreY() };
+                        break;
+                    case 2:
+                        edgeName = "SOUTH";
+                        edgeR = juce::Rectangle<int> (gridRect.getX(), gridRect.getBottom() - 4,
+                                                       gridRect.getWidth(), 4);
+                        arrowFrom = { (float) gridRect.getCentreX(), (float) gridRect.getBottom() + 8.0f };
+                        arrowTo   = { (float) gridRect.getCentreX(), (float) gridRect.getBottom() - 4.0f };
+                        break;
+                    default:
+                        edgeName = "WEST";
+                        edgeR = juce::Rectangle<int> (gridRect.getX(), gridRect.getY(),
+                                                       4, gridRect.getHeight());
+                        arrowFrom = { (float) gridRect.getX() - 8.0f, (float) gridRect.getCentreY() };
+                        arrowTo   = { (float) gridRect.getX() + 4.0f, (float) gridRect.getCentreY() };
+                        break;
                 }
+
+                // Edge flasher
+                if (blinkOn)
+                {
+                    g.setColour (juce::Colour (0xFFFF5252));
+                    g.fillRect (edgeR);
+                }
+
+                // Big red arrow pointing INTO the grid from the attack edge
+                g.setColour (juce::Colour (0xFFFF5252).withAlpha (blinkOn ? 0.95f : 0.5f));
+                g.drawLine (arrowFrom.x, arrowFrom.y, arrowTo.x, arrowTo.y, 2.5f);
+                // Arrow head (two strokes)
+                const float dx = arrowTo.x - arrowFrom.x;
+                const float dy = arrowTo.y - arrowFrom.y;
+                const float len = std::sqrt (dx * dx + dy * dy);
+                if (len > 0.1f)
+                {
+                    const float nx = dx / len, ny = dy / len;
+                    // Perpendicular
+                    const float px = -ny, py = nx;
+                    g.drawLine (arrowTo.x, arrowTo.y,
+                                arrowTo.x - nx * 4.0f + px * 3.0f,
+                                arrowTo.y - ny * 4.0f + py * 3.0f, 2.0f);
+                    g.drawLine (arrowTo.x, arrowTo.y,
+                                arrowTo.x - nx * 4.0f - px * 3.0f,
+                                arrowTo.y - ny * 4.0f - py * 3.0f, 2.0f);
+                }
+
+                // Caption over HUD
+                g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 8.0f, juce::Font::bold));
                 g.setColour (juce::Colour (0xFFFF5252));
-                g.fillRect (edgeR);
-                g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 7.0f, juce::Font::bold));
-                g.drawFittedText (juce::String ("RAID ") + edgeName + " "
+                g.drawFittedText (juce::String ("RAID FROM ") + edgeName + "  "
                                   + juce::String ((int) w.timeToSpawn) + "s",
                                   hudTopRect, juce::Justification::centred, 1);
             }
@@ -2204,8 +3736,16 @@ namespace th::game
                         r.withX (r.getX() + 90).withWidth (110),
                         juce::Justification::centredLeft);
 
-            // Hype bar
-            const auto hR = juce::Rectangle<int> (r.getRight() - 120, r.getY() + 3, 110, 10);
+            // v6.2 — help button "?"
+            const auto helpBtn = getHelpBtnRect();
+            g.setColour (juce::Colour (0xFFC6FF00).withAlpha (0.6f));
+            g.fillRoundedRectangle (helpBtn.toFloat(), 7.0f);
+            g.setColour (juce::Colour (0xFF0A1000));
+            g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::bold));
+            g.drawFittedText ("?", helpBtn, juce::Justification::centred, 1);
+
+            // Hype bar — positioned left of the ? help button
+            const auto hR = juce::Rectangle<int> (r.getRight() - 148, r.getY() + 3, 100, 10);
             g.setColour (juce::Colour (0xFF1A2500));
             g.fillRoundedRectangle (hR.toFloat(), 2.0f);
             const float hf = save.hype / 100.0f;
@@ -2254,23 +3794,38 @@ namespace th::game
         void drawBuildMenu (juce::Graphics& g)
         {
             const auto m = getBuildMenuRect();
-            g.setColour (juce::Colour (0xFF05080A).withAlpha (0.95f));
+
+            // Menu background + shadow
+            g.setColour (juce::Colour (0xFF000000).withAlpha (0.4f));
+            g.fillRoundedRectangle (m.toFloat().translated (0.0f, 3.0f), 4.0f);
+            juce::ColourGradient bg (
+                juce::Colour (0xFF0C1610), (float) m.getX(), (float) m.getY(),
+                juce::Colour (0xFF05080A), (float) m.getX(), (float) m.getBottom(), false);
+            g.setGradientFill (bg);
             g.fillRoundedRectangle (m.toFloat(), 4.0f);
             g.setColour (juce::Colour (0xFFC6FF00));
             g.drawRoundedRectangle (m.toFloat(), 4.0f, 1.5f);
 
             const auto& t = save.grid[(size_t) buildMenuCol][(size_t) buildMenuRow];
-            g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 8.0f, juce::Font::bold));
 
             if (t.type == BType::Empty)
             {
+                // Header: where you're building + money available + close hint
                 g.setColour (juce::Colour (0xFFFFEB3B));
-                g.drawFittedText ("BUILD", m.withHeight (12).translated (0, 2),
-                                  juce::Justification::centred, 1);
-                // 4 cols × up to 3 rows
+                g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 9.0f, juce::Font::bold));
+                g.drawFittedText ("BUILD @ (" + juce::String (buildMenuCol + 1)
+                                  + "," + juce::String (buildMenuRow + 1) + ")",
+                                  m.withHeight (14).translated (0, 2).reduced (8, 0),
+                                  juce::Justification::centredLeft, 1);
+                g.setColour (juce::Colour (0xFFC6FF00));
+                g.drawFittedText ("$" + formatMoney (save.money),
+                                  m.withHeight (14).translated (0, 2).reduced (8, 0),
+                                  juce::Justification::centredRight, 1);
+
+                // 4 cols × 4 rows grid of info-rich cards
                 const int perRow = 4;
                 const int btnW = (m.getWidth() - 10) / perRow;
-                const int btnH = (m.getHeight() - 16) / 3;
+                const int btnH = (m.getHeight() - 18) / 4;
                 int idx = 0;
                 for (int i = 1; i < (int) BType::NUM_TYPES; ++i)
                 {
@@ -2280,55 +3835,158 @@ namespace th::game
                     idx++;
                     const juce::Rectangle<int> br (
                         m.getX() + 4 + col * btnW,
-                        m.getY() + 14 + row * btnH,
+                        m.getY() + 16 + row * btnH,
                         btnW - 4, btnH - 2);
-                    const auto& B = getBuildings()[(size_t) i];
-                    const int cost = getBuildingCost ((BType) i);
-                    const bool canAfford = (int) save.money >= cost;
-                    g.setColour (canAfford ? B.colour.withAlpha (0.6f)
-                                            : juce::Colour (0xFF1A2500));
-                    g.fillRoundedRectangle (br.toFloat(), 2.0f);
-                    g.setColour (canAfford ? juce::Colour (0xFFFFEB3B)
-                                            : juce::Colour (0xFF555555));
-                    g.drawRoundedRectangle (br.toFloat(), 2.0f, 1.0f);
-                    g.setColour (juce::Colour (0xFFF1F8E9));
-                    g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 7.0f, juce::Font::bold));
-                    g.drawFittedText (B.shortName,
-                                      br.withHeight (10).translated (0, 2),
-                                      juce::Justification::centred, 1);
-                    g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 6.0f, juce::Font::plain));
-                    g.setColour (canAfford ? juce::Colour (0xFFC6FF00) : juce::Colour (0xFFFF5252));
-                    g.drawFittedText (juce::String ("$") + juce::String (cost),
-                                      br.withHeight (8).translated (0, (float) br.getHeight() - 10),
-                                      juce::Justification::centred, 1);
+                    drawBuildCard (g, br, (BType) i);
                 }
             }
             else
             {
+                // Upgrade / Demolish view — richer: show current stats + preview
                 const auto& B = getBuildings()[(size_t) t.type];
-                g.setColour (juce::Colour (0xFFFFEB3B));
-                g.drawFittedText (juce::String (B.name) + " LV" + juce::String (t.level),
-                                  m.withHeight (12).translated (0, 2),
-                                  juce::Justification::centred, 1);
-                const juce::Rectangle<int> upR (
-                    m.getX() + 8, m.getY() + 20,
-                    m.getWidth() / 2 - 12, m.getHeight() - 28);
-                const juce::Rectangle<int> dmR (
-                    m.getX() + m.getWidth() / 2 + 4, m.getY() + 20,
-                    m.getWidth() / 2 - 12, m.getHeight() - 28);
                 const int upCost = getBuildingCost (t.type) * (t.level + 1);
                 const int refund = getBuildingCost (t.type) / 2;
-                g.setColour (juce::Colour (0xFFC6FF00).withAlpha (0.65f));
+                const bool canAffordUp = (int) save.money >= upCost;
+
+                // Title bar
+                g.setColour (juce::Colour (0xFFFFEB3B));
+                g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 11.0f, juce::Font::bold));
+                g.drawFittedText (juce::String (B.name) + "  LV " + juce::String (t.level),
+                                  m.withHeight (16).translated (0, 4),
+                                  juce::Justification::centred, 1);
+
+                // Current stats
+                const int statsTop = m.getY() + 24;
+                const int statsH   = 14;
+                const int curInc   = B.baseIncome * t.level;
+                const int nxtInc   = B.baseIncome * (t.level + 1);
+                auto statLine = [&] (int y, juce::Colour col, const juce::String& s)
+                {
+                    g.setColour (col);
+                    g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 9.0f, juce::Font::plain));
+                    g.drawFittedText (s,
+                        juce::Rectangle<int> (m.getX() + 16, y, m.getWidth() - 32, statsH),
+                        juce::Justification::centredLeft, 1);
+                };
+                if (B.category == 0)
+                    statLine (statsTop, juce::Colour (0xFFC6FF00),
+                              "income   +$" + juce::String (curInc) + "/s  ->  $"
+                              + juce::String (nxtInc) + "/s after upgrade");
+                else if (B.category == 1)
+                    statLine (statsTop, juce::Colour (0xFFB0BEC5),
+                              "defense   absorbs raid damage");
+                else
+                    statLine (statsTop, juce::Colour (0xFFFFB74D),
+                              "boost   buffs neighbouring buildings");
+
+                statLine (statsTop + statsH, juce::Colour (0xFFFF5252),
+                          "HP  " + juce::String (t.hp) + " / "
+                          + juce::String (B.hp * t.level));
+
+                // Buttons at bottom
+                const juce::Rectangle<int> upR (
+                    m.getX() + 12, m.getBottom() - 22,
+                    m.getWidth() / 2 - 16, 18);
+                const juce::Rectangle<int> dmR (
+                    m.getX() + m.getWidth() / 2 + 4, m.getBottom() - 22,
+                    m.getWidth() / 2 - 16, 18);
+
+                // Upgrade button
+                g.setColour (canAffordUp ? juce::Colour (0xFFC6FF00) : juce::Colour (0xFF455A64));
                 g.fillRoundedRectangle (upR.toFloat(), 3.0f);
                 g.setColour (juce::Colour (0xFF0A1000));
-                g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 9.0f, juce::Font::bold));
-                g.drawFittedText (juce::String ("UPGRADE $") + juce::String (upCost),
+                g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::bold));
+                g.drawFittedText (juce::String ("UPGRADE  $") + juce::String (upCost),
                                   upR, juce::Justification::centred, 1);
-                g.setColour (juce::Colour (0xFFB71C1C).withAlpha (0.65f));
+
+                // Demolish button
+                g.setColour (juce::Colour (0xFFB71C1C).withAlpha (0.75f));
                 g.fillRoundedRectangle (dmR.toFloat(), 3.0f);
                 g.setColour (juce::Colour (0xFFFFEB3B));
-                g.drawFittedText (juce::String ("DEMOLISH +$") + juce::String (refund),
+                g.drawFittedText (juce::String ("DEMOLISH  +$") + juce::String (refund),
                                   dmR, juce::Justification::centred, 1);
+            }
+        }
+
+        // Rich info card for a single building in the BUILD menu
+        void drawBuildCard (juce::Graphics& g, juce::Rectangle<int> br, BType type)
+        {
+            const auto& B = getBuildings()[(size_t) type];
+            const int cost = getBuildingCost (type);
+            const bool canAfford = (int) save.money >= cost;
+
+            // Card body — darker if unaffordable
+            g.setColour (canAfford ? juce::Colour (0xFF141F16) : juce::Colour (0xFF0A0F0A));
+            g.fillRoundedRectangle (br.toFloat(), 3.0f);
+
+            // Category stripe on the LEFT edge
+            const juce::Colour catColour =
+                B.category == 0 ? juce::Colour (0xFFC6FF00)     // income = green
+                : B.category == 1 ? juce::Colour (0xFFB0BEC5)     // defense = gray
+                                  : juce::Colour (0xFFFFB74D);    // boost = orange
+            g.setColour (catColour.withAlpha (canAfford ? 1.0f : 0.3f));
+            g.fillRect ((float) br.getX(), (float) br.getY(), 3.0f, (float) br.getHeight());
+
+            // Outer border
+            g.setColour (canAfford ? juce::Colour (0xFFFFEB3B) : juce::Colour (0xFF37474F));
+            g.drawRoundedRectangle (br.toFloat(), 3.0f, 1.0f);
+
+            // Mini-sprite on the left (occupies the first ~20px after stripe)
+            const juce::Rectangle<float> iconR ((float) br.getX() + 5.0f,
+                                                 (float) br.getY() + 3.0f,
+                                                 18.0f, (float) br.getHeight() - 6.0f);
+            g.setColour (B.colour.withAlpha (canAfford ? 0.85f : 0.3f));
+            g.fillRoundedRectangle (iconR, 2.0f);
+            g.setColour (juce::Colour (0xFF0A1000).withAlpha (canAfford ? 1.0f : 0.4f));
+            g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 6.0f, juce::Font::bold));
+            g.drawFittedText (B.shortName, iconR.toNearestInt(), juce::Justification::centred, 1);
+
+            // Right side: name on top, cost + income/HP below
+            const int textLeft = br.getX() + 26;
+            const int textW    = br.getWidth() - 28;
+
+            // Row 1: full name
+            g.setColour (canAfford ? juce::Colour (0xFFFFEB3B) : juce::Colour (0xFF555555));
+            g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 7.0f, juce::Font::bold));
+            g.drawFittedText (B.name,
+                juce::Rectangle<int> (textLeft, br.getY() + 2, textW, 8),
+                juce::Justification::centredLeft, 1);
+
+            // Row 2: cost
+            g.setColour (canAfford ? juce::Colour (0xFFC6FF00) : juce::Colour (0xFFFF5252));
+            g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 7.0f, juce::Font::plain));
+            g.drawFittedText (juce::String ("$") + juce::String (cost),
+                juce::Rectangle<int> (textLeft, br.getY() + 10, textW, 7),
+                juce::Justification::centredLeft, 1);
+
+            // Row 3: primary metric (income $/s for income, HP for defense, "+% boost" text)
+            juce::String metric;
+            juce::Colour metricCol;
+            if (B.category == 0)
+            {
+                metric = "+$" + juce::String (B.baseIncome) + "/s";
+                metricCol = juce::Colour (0xFFFFEE58);
+            }
+            else if (B.category == 1)
+            {
+                metric = juce::String (B.hp) + " HP";
+                metricCol = juce::Colour (0xFFFF8A80);
+            }
+            else
+            {
+                metric = "BUFF";
+                metricCol = juce::Colour (0xFFFFB74D);
+            }
+            g.setColour (metricCol.withAlpha (canAfford ? 1.0f : 0.4f));
+            g.drawFittedText (metric,
+                juce::Rectangle<int> (textLeft, br.getY() + 17, textW, 7),
+                juce::Justification::centredLeft, 1);
+
+            // Featured bonus star
+            if ((int) type == save.featuredBType)
+            {
+                g.setColour (juce::Colour (0xFFFFEB3B));
+                g.fillRect ((float) br.getRight() - 6.0f, (float) br.getY() + 2.0f, 4.0f, 4.0f);
             }
         }
 
@@ -2386,20 +4044,22 @@ namespace th::game
             g.setColour (juce::Colour (0xFFFF5252));
             g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 16.0f, juce::Font::bold));
             g.drawFittedText (save.empireHp <= 0 ? "EMPIRE DESTROYED" : "RETIRED",
-                              getLocalBounds().withHeight (30).translated (0, 40),
+                              getLocalBounds().withHeight (30).translated (0, 30),
                               juce::Justification::centred, 1);
 
             g.setColour (juce::Colour (0xFFFFEB3B));
             g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 9.0f, juce::Font::bold));
             g.drawFittedText (juce::String ("EARNED $") + formatMoney (save.totalEarnedRun)
                               + "   +LEGEND " + juce::String ((int) (save.totalEarnedRun / 1000.0)),
-                              getLocalBounds().withHeight (20).translated (0, 80),
+                              getLocalBounds().withHeight (20).translated (0, 62),
                               juce::Justification::centred, 1);
+
+            drawBigBanner (g);
 
             g.setColour (juce::Colour (0xFFC6FF00));
             g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 8.0f, juce::Font::plain));
             g.drawFittedText ("tap to return to menu",
-                              getLocalBounds().withHeight (12).translated (0, 120),
+                              getLocalBounds().withHeight (12).translated (0, getHeight() - 24),
                               juce::Justification::centred, 1);
         }
 
