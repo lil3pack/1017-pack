@@ -390,29 +390,20 @@ TrapHouseEditor::TrapHouseEditor (TrapHouseProcessor& p)
     tycoon.loadSaveState (p.tycoonState);
     addAndMakeVisible (tycoon);
 
-    // v5.2 — drag handle: wire callbacks so the editor can reposition the
-    // tycoon when the user grabs its top-right handle. The tycoon already
-    // detects the hit and fires these; the editor is free to translate the
-    // drag into updated tycoonX/tycoonY + resized().
-    tycoon.onDragHandleDown = [this] (const juce::MouseEvent& ev)
+    // v7.0 — corner drag handle RESIZES the game viewport (min 280x160,
+    // max 940x480). Position stays anchored to its top-left.
+    tycoon.onDragHandleDown = [this] (const juce::MouseEvent&)
     {
         dragTarget = DragTarget::Tycoon;
-        // ev.getPosition() is relative to the tycoon component — convert
-        // by adding the tycoon's origin so dragOffset is in editor coords.
-        const auto editorPos = ev.getEventRelativeTo (this).getPosition();
-        dragOffset = juce::Point<float> (editorPos.x - tycoonX,
-                                          editorPos.y - tycoonY);
     };
     tycoon.onDragHandleDrag = [this] (const juce::MouseEvent& ev)
     {
         if (dragTarget != DragTarget::Tycoon) return;
         const auto editorPos = ev.getEventRelativeTo (this).getPosition();
-        tycoonX = juce::jlimit (0.0f,
-                                 (float) (getWidth()  - tycoonW),
-                                 editorPos.x - dragOffset.x);
-        tycoonY = juce::jlimit (40.0f,
-                                 (float) (getHeight() - tycoonH),
-                                 editorPos.y - dragOffset.y);
+        const int newW = juce::jlimit (280, 940, (int) (editorPos.x - tycoonX));
+        const int newH = juce::jlimit (160, 480, (int) (editorPos.y - tycoonY));
+        tycoonW = newW;
+        tycoonH = newH;
         resized();
     };
     tycoon.onDragHandleUp = [this] (const juce::MouseEvent&)
